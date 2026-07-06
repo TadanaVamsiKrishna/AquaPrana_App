@@ -1,23 +1,11 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Stack } from "expo-router";
 
-export default function HomeScreen() {
+export default function RootLayout() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>AquaPrana Home</Text>
-    </View>
+    <Stack
+      screenOptions={{
+        headerShown: false,
+      }}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: "#0A84FF",
-  },
-});
