@@ -32,8 +32,72 @@ const colors = {
 type PickerField = "state" | "district" | "language";
 
 const pickerOptions: Record<PickerField, string[]> = {
-  state: ["Andhra Pradesh", "Tamil Nadu", "Telangana", "Odisha", "West Bengal"],
-  district: ["Nellore", "Krishna", "Guntur", "East Godavari", "Visakhapatnam"],
+  state:[
+    "Andhra Pradesh",
+    "Arunachal Pradesh",
+    "Assam",
+    "Bihar",
+    "Chhattisgarh",
+    "Goa",
+    "Gujarat",
+    "Haryana",
+    "Himachal Pradesh",
+    "Jharkhand",
+    "Karnataka",
+    "Kerala",
+    "Madhya Pradesh",
+    "Maharashtra",
+    "Manipur",
+    "Meghalaya",
+    "Mizoram",
+    "Nagaland",
+    "Odisha",
+    "Punjab",
+    "Rajasthan",
+    "Sikkim",
+    "Tamil Nadu",
+    "Telangana",
+    "Tripura",
+    "Uttar Pradesh",
+    "Uttarakhand",
+    "West Bengal",
+    "Andaman and Nicobar Islands",
+    "Chandigarh",
+    "Dadra and Nagar Haveli and Daman and Diu",
+    "Delhi",
+    "Jammu and Kashmir",
+    "Ladakh",
+    "Lakshadweep",
+    "Puducherry"
+    ],
+  district: [
+    "Alluri Sitharama Raju",
+    "Anakapalli",
+    "Annamayya",
+    "Ananthapuramu",
+    "Bapatla",
+    "Chittoor",
+    "Dr. B.R. Ambedkar Konaseema",
+    "East Godavari",
+    "Eluru",
+    "Guntur",
+    "Kakinada",
+    "Krishna",
+    "Kurnool",
+    "Nandyal",
+    "NTR",
+    "Palnadu",
+    "Parvathipuram Manyam",
+    "Prakasam",
+    "Sri Potti Sriramulu Nellore",
+    "Sri Sathya Sai",
+    "Srikakulam",
+    "Tirupati",
+    "Visakhapatnam",
+    "Vizianagaram",
+    "West Godavari",
+    "YSR Kadapa"
+    ],
   language: ["English", "Telugu", "Hindi"],
 };
 
@@ -45,6 +109,7 @@ export default function FarmerProfileScreen() {
   const [district, setDistrict] = useState("");
   const [language, setLanguage] = useState("");
   const [activePicker, setActivePicker] = useState<PickerField | null>(null);
+  const [pickerSearchQuery, setPickerSearchQuery] = useState("");
   const [touched, setTouched] = useState({
     name: false,
     state: false,
@@ -65,9 +130,55 @@ export default function FarmerProfileScreen() {
     }));
   };
 
+  const getPickerValue = (field: PickerField) => {
+    if (field === "state") {
+      return selectedState;
+    }
+
+    if (field === "district") {
+      return district;
+    }
+
+    return language;
+  };
+
+  const showPickerError = (field: PickerField, value: string) =>
+    touched[field] && !value && activePicker !== field;
+
+  const blurPicker = (field: PickerField) => {
+    if (!getPickerValue(field)) {
+      markTouched(field);
+    }
+  };
+
+  const isSearchablePicker = (field: PickerField) =>
+    field === "state" || field === "district";
+
+  const getFilteredOptions = (field: PickerField) => {
+    const options = pickerOptions[field];
+
+    if (!isSearchablePicker(field) || !pickerSearchQuery.trim()) {
+      return options;
+    }
+
+    const query = pickerSearchQuery.trim().toLowerCase();
+    return options.filter((option) => option.toLowerCase().includes(query));
+  };
+
   const openPicker = (field: PickerField) => {
-    markTouched(field);
-    setActivePicker((current) => (current === field ? null : field));
+    if (activePicker === field) {
+      setPickerSearchQuery("");
+      blurPicker(field);
+      setActivePicker(null);
+      return;
+    }
+
+    if (activePicker !== null) {
+      blurPicker(activePicker);
+    }
+
+    setPickerSearchQuery("");
+    setActivePicker(field);
   };
 
   const handlePickerSelect = (value: string) => {
@@ -83,85 +194,108 @@ export default function FarmerProfileScreen() {
       setLanguage(value);
     }
 
+    setPickerSearchQuery("");
     setActivePicker(null);
   };
 
-  const handleSaveProfile = async () => {
+  const handleSaveProfile = () => {
+    if (activePicker !== null) {
+      blurPicker(activePicker);
+      setActivePicker(null);
+      setPickerSearchQuery("");
+    }
 
     if (!isFormValid) {
-  
       setTouched({
         name: true,
         state: true,
         district: true,
         language: true,
       });
-  
       return;
     }
-  
-    const { error } = await saveProfile(
-  
-      name,
-  
-      selectedState,
-  
-      district,
-  
-      language
-  
-    );
-  
-    if (error) {
-  
-      alert(error.message);
-      return;
-  
-    }
-  
-    alert("Profile Saved Successfully");
-  
-    router.replace("/home");
-  
+
+    router.replace("/pond-setup" as never);
   };
+
 
   const renderDropdown = (field: PickerField, selectedValue: string) => {
     if (activePicker !== field) {
       return null;
     }
 
+    const filteredOptions = getFilteredOptions(field);
+    const showSearch = isSearchablePicker(field);
+
     return (
       <View style={styles.dropdownMenu}>
-        {pickerOptions[field].map((option, index) => {
-          const isSelected = selectedValue === option;
-          const isLastOption = index === pickerOptions[field].length - 1;
-
-          return (
-            <Pressable
-              key={option}
-              onPress={() => handlePickerSelect(option)}
-              style={({ pressed }) => [
-                styles.dropdownOption,
-                isSelected && styles.dropdownOptionSelected,
-                isLastOption && styles.dropdownOptionLast,
-                pressed && styles.dropdownOptionPressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.dropdownOptionText,
-                  isSelected && styles.dropdownOptionTextSelected,
-                ]}
+        {showSearch ? (
+          <View style={styles.dropdownSearchWrap}>
+            <Feather name="search" size={18} color={colors.muted} />
+            <TextInput
+              value={pickerSearchQuery}
+              onChangeText={setPickerSearchQuery}
+              placeholder={`Search ${field}...`}
+              placeholderTextColor={colors.muted}
+              style={styles.dropdownSearchInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {pickerSearchQuery.length > 0 ? (
+              <Pressable
+                onPress={() => setPickerSearchQuery("")}
+                hitSlop={8}
+                accessibilityLabel={`Clear ${field} search`}
               >
-                {option}
-              </Text>
+                <Feather name="x" size={18} color={colors.muted} />
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
-              {isSelected ? (
-                <Feather name="check" size={18} color={colors.primary} />
-              ) : null}
-            </Pressable>
-          );
-        })}
+        <ScrollView
+          style={showSearch ? styles.dropdownScroll : undefined}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+        >
+          {filteredOptions.length === 0 ? (
+            <View style={styles.dropdownEmpty}>
+              <Text style={styles.dropdownEmptyText}>No results found</Text>
+            </View>
+          ) : (
+            filteredOptions.map((option, index) => {
+              const isSelected = selectedValue === option;
+              const isLastOption = index === filteredOptions.length - 1;
+
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => handlePickerSelect(option)}
+                  style={({ pressed }) => [
+                    styles.dropdownOption,
+                    isSelected && styles.dropdownOptionSelected,
+                    isLastOption && styles.dropdownOptionLast,
+                    pressed && styles.dropdownOptionPressed,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.dropdownOptionText,
+                      isSelected && styles.dropdownOptionTextSelected,
+                    ]}
+                  >
+                    {option}
+                  </Text>
+
+                  {isSelected ? (
+                    <Feather name="check" size={18} color={colors.primary} />
+                  ) : null}
+                </Pressable>
+              );
+            })
+          )}
+        </ScrollView>
       </View>
     );
   };
@@ -236,7 +370,7 @@ export default function FarmerProfileScreen() {
                 style={[
                   styles.selectControl,
                   activePicker === "state" && styles.selectControlActive,
-                  touched.state && !selectedState && styles.inputError,
+                  showPickerError("state", selectedState) && styles.inputError,
                 ]}
               >
                 <Text
@@ -261,7 +395,7 @@ export default function FarmerProfileScreen() {
 
               {renderDropdown("state", selectedState)}
 
-              {touched.state && !selectedState ? (
+              {showPickerError("state", selectedState) ? (
                 <Text style={styles.errorText}>State is required</Text>
               ) : null}
             </View>
@@ -277,7 +411,7 @@ export default function FarmerProfileScreen() {
                 style={[
                   styles.selectControl,
                   activePicker === "district" && styles.selectControlActive,
-                  touched.district && !district && styles.inputError,
+                  showPickerError("district", district) && styles.inputError,
                 ]}
               >
                 <Text
@@ -302,7 +436,7 @@ export default function FarmerProfileScreen() {
 
               {renderDropdown("district", district)}
 
-              {touched.district && !district ? (
+              {showPickerError("district", district) ? (
                 <Text style={styles.errorText}>District is required</Text>
               ) : null}
             </View>
@@ -318,7 +452,7 @@ export default function FarmerProfileScreen() {
                 style={[
                   styles.selectControl,
                   activePicker === "language" && styles.selectControlActive,
-                  touched.language && !language && styles.inputError,
+                  showPickerError("language", language) && styles.inputError,
                 ]}
               >
                 <Text
@@ -343,18 +477,17 @@ export default function FarmerProfileScreen() {
 
               {renderDropdown("language", language)}
 
-              {touched.language && !language ? (
+              {showPickerError("language", language) ? (
                 <Text style={styles.errorText}>Language is required</Text>
               ) : null}
             </View>
 
             <Pressable
               onPress={handleSaveProfile}
-              disabled={!isFormValid}
               style={({ pressed }) => [
                 styles.saveButton,
                 !isFormValid && styles.saveButtonDisabled,
-                pressed && isFormValid && styles.saveButtonPressed,
+                pressed && styles.saveButtonPressed,
               ]}
             >
               <Feather name="save" size={19} color={colors.white} />
@@ -552,6 +685,38 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 14,
     elevation: 4,
+  },
+  dropdownSearchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+    gap: 10,
+  },
+  dropdownSearchInput: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "600",
+    paddingVertical: 0,
+  },
+  dropdownScroll: {
+    maxHeight: 220,
+  },
+  dropdownEmpty: {
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  dropdownEmptyText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "600",
   },
   dropdownOption: {
     minHeight: 48,
