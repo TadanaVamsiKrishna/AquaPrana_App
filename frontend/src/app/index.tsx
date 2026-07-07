@@ -1,3 +1,4 @@
+
 import { useEffect } from "react";
 import { StatusBar, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
