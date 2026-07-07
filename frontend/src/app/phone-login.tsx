@@ -1,4 +1,7 @@
 import { useState } from "react";
+//import { supabase } from "../lib/supabase";
+import { sendOTP } from "../services/auth";
+
 import {
   KeyboardAvoidingView,
   Platform,
@@ -23,9 +26,32 @@ export default function PhoneLoginScreen() {
     setPhoneNumber(digitsOnly);
   };
 
-  const handleContinue = () => {
-    if (!isValidPhoneNumber) return;
-    router.push("/verify-otp");
+  const handleContinue = async () => {
+
+    if (!isValidPhoneNumber) {
+      alert("Enter a valid phone number");
+      return;
+    }
+  
+    const fullPhone = `+91${phoneNumber}`;
+  
+    const { data, error } = await sendOTP(fullPhone);
+  
+    console.log("DATA:", data);
+    console.log("ERROR:", error);
+  
+    if (error) {
+      alert(error.message);
+      return;
+    }
+  
+    router.push({
+      pathname: "/verify-otp",
+      params: {
+        phone: fullPhone,
+      },
+    });
+  
   };
 
   return (

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { verifyOTP } from "../services/auth";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -9,7 +10,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const colors = {
@@ -25,6 +26,9 @@ const colors = {
 
 export default function VerifyOtpScreen() {
   const router = useRouter();
+  const { phone } = useLocalSearchParams<{
+    phone: string;
+  }>();
   const [otp, setOtp] = useState("");
   const [resendSeconds, setResendSeconds] = useState(30);
 
@@ -48,11 +52,26 @@ export default function VerifyOtpScreen() {
     setOtp(digitsOnly);
   };
 
-  const handleVerifyOtp = () => {
+  // const handleVerifyOtp = () => {
+  //   if (!isOtpValid) {
+  //     return;
+  //   }
+
+  //   router.push("/farmer-profile");
+  // };
+
+  const handleVerifyOtp = async () => {
     if (!isOtpValid) {
       return;
     }
-
+  
+    const { error } = await verifyOTP(phone as string, otp);
+  
+    if (error) {
+      alert(error.message);
+      return;
+    }
+  
     router.push("/farmer-profile");
   };
 
@@ -83,7 +102,9 @@ export default function VerifyOtpScreen() {
 
             <View style={styles.phoneCard}>
               <Text style={styles.phoneLabel}>Mobile number</Text>
-              <Text style={styles.phoneNumber}>+91 9876543210</Text>
+              <Text style={styles.phoneNumber}>
+                {phone || "No phone number"}
+              </Text>
             </View>
 
             <View style={styles.otpCard}>

@@ -1,5 +1,6 @@
 
 import { useState } from "react";
+import { saveProfile } from "../services/profile";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -85,18 +86,43 @@ export default function FarmerProfileScreen() {
     setActivePicker(null);
   };
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
+
     if (!isFormValid) {
+  
       setTouched({
         name: true,
         state: true,
         district: true,
         language: true,
       });
+  
       return;
     }
-
-    router.replace("/home" as never);
+  
+    const { error } = await saveProfile(
+  
+      name,
+  
+      selectedState,
+  
+      district,
+  
+      language
+  
+    );
+  
+    if (error) {
+  
+      alert(error.message);
+      return;
+  
+    }
+  
+    alert("Profile Saved Successfully");
+  
+    router.replace("/home");
+  
   };
 
   const renderDropdown = (field: PickerField, selectedValue: string) => {
