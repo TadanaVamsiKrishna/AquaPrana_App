@@ -1,7 +1,8 @@
 import { useState } from "react";
+import * as Location from "expo-location";
+import { savePond } from "../services/pond";
 import {
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -15,13 +16,7 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  savePondDraft,
-  type LandOwnership,
-} from "../services/local-ponds";
-
-const LAND_OWNERSHIP_OPTIONS: LandOwnership[] = ["Own", "Rented/Leased"];
-
+ 
 const colors = {
   primary: "#0A84FF",
   background: "#F4FAFF",
@@ -35,45 +30,49 @@ const colors = {
   disabled: "#B8D8F6",
   shadow: "#0A4F9E",
 };
-
+ 
 type TouchedFields = {
   pondName: boolean;
   area: boolean;
   depth: boolean;
-  landOwnership: boolean;
 };
-
+ 
 const sanitizeDecimalInput = (value: string) => {
   const cleanedValue = value.replace(/[^0-9.]/g, "");
   const parts = cleanedValue.split(".");
-
+ 
   if (parts.length <= 1) {
     return cleanedValue;
   }
-
+ 
   return `${parts[0]}.${parts.slice(1).join("")}`;
 };
-
+ 
 const isPositiveNumber = (value: string) => {
   const numberValue = Number(value);
   return value.trim().length > 0 && Number.isFinite(numberValue) && numberValue > 0;
 };
-
+ 
 export default function PondSetupScreen() {
   const router = useRouter();
-
+ 
   const [pondName, setPondName] = useState("");
   const [area, setArea] = useState("");
   const [averageDepth, setAverageDepth] = useState("");
-  const [landOwnership, setLandOwnership] = useState<LandOwnership | "">("");
-  const [landOwnershipPickerOpen, setLandOwnershipPickerOpen] = useState(false);
+ 
+  const [location, setLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+ 
+  const [locationText, setLocationText] = useState("");
+ 
   const [touched, setTouched] = useState<TouchedFields>({
     pondName: false,
     area: false,
     depth: false,
-    landOwnership: false,
   });
-
+ 
   const pondNameError =
     touched.pondName && !pondName.trim() ? "Pond Name is required" : "";
   const areaError =
@@ -88,79 +87,114 @@ export default function PondSetupScreen() {
       : touched.depth && !isPositiveNumber(averageDepth)
         ? "Enter a valid depth"
         : "";
-  const landOwnershipError =
-    touched.landOwnership && !landOwnership
-      ? "Land Ownership is required"
-      : "";
-
+ 
   const isFormValid =
     pondName.trim().length > 0 &&
     isPositiveNumber(area) &&
-    isPositiveNumber(averageDepth) &&
-    landOwnership.length > 0;
-
+    isPositiveNumber(averageDepth);
+ 
   const markTouched = (field: keyof TouchedFields) => {
     setTouched((current) => ({
       ...current,
       [field]: true,
     }));
   };
-
+ 
   const handleAreaChange = (value: string) => {
     setArea(sanitizeDecimalInput(value));
   };
-
+ 
   const handleDepthChange = (value: string) => {
     setAverageDepth(sanitizeDecimalInput(value));
   };
-
-  const handleCaptureLocation = () => {
-    Alert.alert("Location", "GPS integration will be added later.");
-  };
-
-  const handleLandOwnershipSelect = (value: LandOwnership) => {
-    setLandOwnership(value);
-    setLandOwnershipPickerOpen(false);
-    markTouched("landOwnership");
-  };
-
-  const toggleLandOwnershipPicker = () => {
-    setLandOwnershipPickerOpen((current) => {
-      const nextOpen = !current;
-
-      if (!nextOpen && !landOwnership) {
-        markTouched("landOwnership");
+ 
+  const handleCaptureLocation = async () => {
+    try {
+      // Request location permission
+      const { status } = await Location.requestForegroundPermissionsAsync();
+ 
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "Location permission is required."
+        );
+        return;
       }
-
-      return nextOpen;
-    });
-  };
-
-  const handleContinue = async () => {
-    if (!isFormValid || !landOwnership) {
-      setTouched({
-        pondName: true,
-        area: true,
-        depth: true,
-        landOwnership: true,
+ 
+      // Get current GPS location
+      const currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
       });
-      return;
+ 
+      const latitude = currentLocation.coords.latitude;
+      const longitude = currentLocation.coords.longitude;
+ 
+      // Save coordinates
+      setLocation({
+        latitude,
+        longitude,
+      });
+ 
+      // Display coordinates on screen
+      setLocationText(
+        `Latitude: ${latitude}\nLongitude: ${longitude}`
+      );
+ 
+    } catch (error) {
+      console.error(error);
+      Alert.alert(
+        "Error",
+        "Unable to get current location."
+      );
     }
-
-    await savePondDraft({
-      pondName: pondName.trim(),
-      area,
-      depth: averageDepth,
-      landOwnership,
-    });
-
-    router.push("/start-journey" as never);
   };
-
+  const handleContinue = async () => {
+ 
+    if (!isFormValid) {
+        setTouched({
+            pondName: true,
+            area: true,
+            depth: true,
+        });
+ 
+        return;
+    }
+ 
+    const { error } = await savePond(
+ 
+        pondName,
+ 
+        area,
+ 
+        averageDepth,
+ 
+        location?.latitude,
+ 
+        location?.longitude
+ 
+    );
+ 
+    if (error) {
+      console.log("Supabase Error:", error);
+ 
+      Alert.alert(
+        "Supabase Error",
+        JSON.stringify(error, null, 2)
+      );
+ 
+      return;
+  }
+ 
+    Alert.alert("Success", "Pond Saved Successfully");
+ 
+    router.push("/start-journey");
+ 
+};
+ 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-
+ 
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -178,9 +212,9 @@ export default function PondSetupScreen() {
             >
               <Feather name="arrow-left" size={22} color={colors.text} />
             </Pressable>
-
+ 
             <Text style={styles.headerTitle}>Setup Pond</Text>
-
+ 
             <Pressable
               onPress={() =>
                 Alert.alert(
@@ -198,13 +232,11 @@ export default function PondSetupScreen() {
               <Feather name="help-circle" size={22} color={colors.primary} />
             </Pressable>
           </View>
-
+ 
           <ScrollView
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            scrollEnabled={!landOwnershipPickerOpen}
-            nestedScrollEnabled
           >
             <View style={styles.headingBlock}>
               <View style={styles.headingIcon}>
@@ -216,14 +248,14 @@ export default function PondSetupScreen() {
                 optimize monitoring.
               </Text>
             </View>
-
+ 
             <View style={styles.formCard}>
               <View style={styles.fieldBlock}>
                 <View style={styles.labelRow}>
                   <Feather name="edit-3" size={17} color={colors.primary} />
                   <Text style={styles.label}>Pond Name</Text>
                 </View>
-
+ 
                 <TextInput
                   value={pondName}
                   onChangeText={setPondName}
@@ -237,19 +269,19 @@ export default function PondSetupScreen() {
                   autoCapitalize="words"
                   returnKeyType="done"
                 />
-
+ 
                 {pondNameError ? (
                   <Text style={styles.errorText}>{pondNameError}</Text>
                 ) : null}
               </View>
-
+ 
               <View style={styles.metricsRow}>
                 <View style={[styles.metricField, styles.metricFieldLeft]}>
                   <View style={styles.labelRow}>
                     <Feather name="maximize-2" size={17} color={colors.primary} />
                     <Text style={styles.label}>Area in Acres</Text>
                   </View>
-
+ 
                   <View
                     style={[
                       styles.numericInputShell,
@@ -269,18 +301,18 @@ export default function PondSetupScreen() {
                     />
                     <Text style={styles.suffix}>Acres</Text>
                   </View>
-
+ 
                   {areaError ? (
                     <Text style={styles.errorText}>{areaError}</Text>
                   ) : null}
                 </View>
-
+ 
                 <View style={styles.metricField}>
                   <View style={styles.labelRow}>
                     <Feather name="activity" size={17} color={colors.primary} />
                     <Text style={styles.label}>Avg. Depth</Text>
                   </View>
-
+ 
                   <View
                     style={[
                       styles.numericInputShell,
@@ -300,107 +332,20 @@ export default function PondSetupScreen() {
                     />
                     <Text style={styles.suffix}>Feet</Text>
                   </View>
-
+ 
                   {depthError ? (
                     <Text style={styles.errorText}>{depthError}</Text>
                   ) : null}
                 </View>
               </View>
-
-              <View style={[styles.fieldBlock, styles.fieldBlockLast]}>
-                <View style={styles.labelRow}>
-                  <Feather name="home" size={17} color={colors.primary} />
-                  <Text style={styles.label}>Land Ownership</Text>
-                </View>
-
-                <Pressable
-                  onPress={toggleLandOwnershipPicker}
-                  style={[
-                    styles.selectControl,
-                    landOwnershipPickerOpen && styles.selectControlActive,
-                    landOwnershipError ? styles.inputError : null,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.selectText,
-                      !landOwnership && styles.placeholderText,
-                    ]}
-                  >
-                    {landOwnership || "Select Land Ownership"}
-                  </Text>
-
-                  <Feather
-                    name={
-                      landOwnershipPickerOpen ? "chevron-up" : "chevron-down"
-                    }
-                    size={20}
-                    color={
-                      landOwnershipPickerOpen ? colors.primary : colors.muted
-                    }
-                  />
-                </Pressable>
-
-                {landOwnershipPickerOpen ? (
-                  <View style={styles.dropdownMenu}>
-                    <FlatList
-                      data={LAND_OWNERSHIP_OPTIONS}
-                      keyExtractor={(option) => option}
-                      style={styles.dropdownScroll}
-                      nestedScrollEnabled
-                      keyboardShouldPersistTaps="handled"
-                      showsVerticalScrollIndicator
-                      persistentScrollbar={Platform.OS === "android"}
-                      renderItem={({ item: option, index }) => {
-                        const isSelected = landOwnership === option;
-                        const isLastOption =
-                          index === LAND_OWNERSHIP_OPTIONS.length - 1;
-
-                        return (
-                          <Pressable
-                            onPress={() => handleLandOwnershipSelect(option)}
-                            style={({ pressed }) => [
-                              styles.dropdownOption,
-                              isSelected && styles.dropdownOptionSelected,
-                              isLastOption && styles.dropdownOptionLast,
-                              pressed && styles.dropdownOptionPressed,
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.dropdownOptionText,
-                                isSelected && styles.dropdownOptionTextSelected,
-                              ]}
-                            >
-                              {option}
-                            </Text>
-
-                            {isSelected ? (
-                              <Feather
-                                name="check"
-                                size={18}
-                                color={colors.primary}
-                              />
-                            ) : null}
-                          </Pressable>
-                        );
-                      }}
-                    />
-                  </View>
-                ) : null}
-
-                {landOwnershipError ? (
-                  <Text style={styles.errorText}>{landOwnershipError}</Text>
-                ) : null}
-              </View>
             </View>
-
+ 
             <View style={styles.locationCard}>
               <View style={styles.locationTopRow}>
                 <View style={styles.locationIconCircle}>
                   <Feather name="map-pin" size={22} color={colors.primary} />
                 </View>
-
+ 
                 <View style={styles.locationCopy}>
                   <Text style={styles.locationTitle}>Pond Location</Text>
                   <Text style={styles.locationSubtitle}>
@@ -408,9 +353,10 @@ export default function PondSetupScreen() {
                   </Text>
                 </View>
               </View>
-
+ 
               <Pressable
                 onPress={handleCaptureLocation}
+ 
                 style={({ pressed }) => [
                   styles.locationButton,
                   pressed && styles.locationButtonPressed,
@@ -420,9 +366,40 @@ export default function PondSetupScreen() {
                 <Feather name="navigation" size={18} color={colors.primary} />
                 <Text style={styles.locationButtonText}>Capture Location</Text>
               </Pressable>
+ 
+              {location && (
+  <View
+    style={{
+      marginTop: 15,
+      padding: 12,
+      backgroundColor: colors.softBlue,
+      borderRadius: 10,
+    }}
+  >
+    <Text
+      style={{
+        fontWeight: "700",
+        color: colors.text,
+        fontSize: 15,
+      }}
+    >
+      📍 Current Location
+    </Text>
+ 
+    <Text
+      style={{
+        marginTop: 6,
+        color: colors.text,
+      }}
+    >
+      {locationText}
+    </Text>
+  </View>
+)}
+ 
             </View>
           </ScrollView>
-
+ 
           <View style={styles.footer}>
             <Pressable
               onPress={handleContinue}
@@ -443,7 +420,7 @@ export default function PondSetupScreen() {
     </SafeAreaView>
   );
 }
-
+ 
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -539,81 +516,6 @@ const styles = StyleSheet.create({
   },
   fieldBlock: {
     marginBottom: 18,
-  },
-  fieldBlockLast: {
-    marginBottom: 0,
-  },
-  selectControl: {
-    height: 56,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.paleBlue,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  selectControlActive: {
-    borderColor: colors.primary,
-  },
-  selectText: {
-    flex: 1,
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: "700",
-    marginRight: 8,
-  },
-  placeholderText: {
-    color: colors.muted,
-    fontWeight: "500",
-  },
-  dropdownMenu: {
-    marginTop: 8,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    overflow: "hidden",
-    shadowColor: colors.shadow,
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 4,
-  },
-  dropdownScroll: {
-    maxHeight: 220,
-  },
-  dropdownOption: {
-    minHeight: 50,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  dropdownOptionLast: {
-    borderBottomWidth: 0,
-  },
-  dropdownOptionSelected: {
-    backgroundColor: colors.softBlue,
-  },
-  dropdownOptionPressed: {
-    opacity: 0.82,
-  },
-  dropdownOptionText: {
-    color: colors.text,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: "600",
-  },
-  dropdownOptionTextSelected: {
-    color: colors.primary,
-    fontWeight: "800",
   },
   labelRow: {
     flexDirection: "row",
@@ -785,3 +687,4 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 });
+ 
