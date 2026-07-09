@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { verifyOTP } from "../services/auth";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -10,6 +10,12 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { verifyOTP } from "../services/auth";
+import {
+  farmerExistsForPhone,
+  getCurrentUserProfile,
+} from "../services/profile";
+import { saveFarmerProfile } from "../services/local-profile";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -31,9 +37,11 @@ export default function VerifyOtpScreen() {
   }>();
   const [otp, setOtp] = useState("");
   const [resendSeconds, setResendSeconds] = useState(30);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const isOtpValid = otp.length === 6;
   const isResendDisabled = resendSeconds > 0;
+  const isVerifyDisabled = !isOtpValid || isVerifying;
 
   useEffect(() => {
     if (resendSeconds <= 0) {
@@ -61,18 +69,65 @@ export default function VerifyOtpScreen() {
   // };
 
   const handleVerifyOtp = async () => {
-    if (!isOtpValid) {
+    if (!isOtpValid || isVerifying) {
       return;
     }
-  
-    const { error } = await verifyOTP(phone as string, otp);
-  
-    if (error) {
-      alert(error.message);
-      return;
+
+    setIsVerifying(true);
+
+    try {
+      const { error } = await verifyOTP(phone as string, otp);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      const {
+        exists: phoneExists,
+        profile: phoneProfile,
+        error: phoneLookupError,
+      } = await farmerExistsForPhone(phone as string);
+
+      if (phoneLookupError) {
+        alert(phoneLookupError.message);
+        return;
+      }
+
+      if (phoneExists && phoneProfile) {
+        await saveFarmerProfile({
+          name: phoneProfile.name,
+          state: phoneProfile.state ?? "",
+          district: phoneProfile.district ?? "",
+          language: phoneProfile.language ?? "",
+        });
+        router.replace("/home" as never);
+        return;
+      }
+
+      const { profile: userProfile, error: userProfileError } =
+        await getCurrentUserProfile();
+
+      if (userProfileError) {
+        alert(userProfileError.message);
+        return;
+      }
+
+      if (userProfile?.name) {
+        await saveFarmerProfile({
+          name: userProfile.name,
+          state: userProfile.state ?? "",
+          district: userProfile.district ?? "",
+          language: userProfile.language ?? "",
+        });
+        router.replace("/home" as never);
+        return;
+      }
+
+      router.replace("/farmer-profile" as never);
+    } finally {
+      setIsVerifying(false);
     }
-  
-    router.push("/farmer-profile");
   };
 
   const handleResendOtp = () => {
@@ -128,16 +183,20 @@ export default function VerifyOtpScreen() {
 
               <Pressable
                 onPress={handleVerifyOtp}
-                disabled={!isOtpValid}
+                disabled={isVerifyDisabled}
                 style={({ pressed }) => [
                   styles.verifyButton,
-                  !isOtpValid && styles.buttonDisabled,
-                  pressed && isOtpValid && styles.buttonPressed,
+                  isVerifyDisabled && styles.buttonDisabled,
+                  pressed && isOtpValid && !isVerifying && styles.buttonPressed,
                 ]}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: !isOtpValid }}
+                accessibilityState={{ disabled: isVerifyDisabled }}
               >
-                <Text style={styles.verifyButtonText}>Verify OTP</Text>
+                {isVerifying ? (
+                  <ActivityIndicator color={colors.white} />
+                ) : (
+                  <Text style={styles.verifyButtonText}>Verify OTP</Text>
+                )}
               </Pressable>
             </View>
           </View>

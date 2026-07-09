@@ -68,7 +68,12 @@ export default function StartJourneyScreen() {
   const [selectedOption, setSelectedOption] = useState<JourneyOption>("new");
 
   const handleContinue = () => {
-    router.push("/home" as never);
+    if (selectedOption === "new") {
+      router.push("/crop-details" as never);
+      return;
+    }
+
+    router.push("/join-existing-cycle" as never);
   };
 
   return (

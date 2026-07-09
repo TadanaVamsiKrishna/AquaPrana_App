@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Alert,
+  FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -14,6 +15,12 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  savePondDraft,
+  type LandOwnership,
+} from "../services/local-ponds";
+
+const LAND_OWNERSHIP_OPTIONS: LandOwnership[] = ["Own", "Rented/Leased"];
 
 const colors = {
   primary: "#0A84FF",
@@ -33,6 +40,7 @@ type TouchedFields = {
   pondName: boolean;
   area: boolean;
   depth: boolean;
+  landOwnership: boolean;
 };
 
 const sanitizeDecimalInput = (value: string) => {
@@ -57,10 +65,13 @@ export default function PondSetupScreen() {
   const [pondName, setPondName] = useState("");
   const [area, setArea] = useState("");
   const [averageDepth, setAverageDepth] = useState("");
+  const [landOwnership, setLandOwnership] = useState<LandOwnership | "">("");
+  const [landOwnershipPickerOpen, setLandOwnershipPickerOpen] = useState(false);
   const [touched, setTouched] = useState<TouchedFields>({
     pondName: false,
     area: false,
     depth: false,
+    landOwnership: false,
   });
 
   const pondNameError =
@@ -77,11 +88,16 @@ export default function PondSetupScreen() {
       : touched.depth && !isPositiveNumber(averageDepth)
         ? "Enter a valid depth"
         : "";
+  const landOwnershipError =
+    touched.landOwnership && !landOwnership
+      ? "Land Ownership is required"
+      : "";
 
   const isFormValid =
     pondName.trim().length > 0 &&
     isPositiveNumber(area) &&
-    isPositiveNumber(averageDepth);
+    isPositiveNumber(averageDepth) &&
+    landOwnership.length > 0;
 
   const markTouched = (field: keyof TouchedFields) => {
     setTouched((current) => ({
@@ -102,15 +118,41 @@ export default function PondSetupScreen() {
     Alert.alert("Location", "GPS integration will be added later.");
   };
 
-  const handleContinue = () => {
-    if (!isFormValid) {
+  const handleLandOwnershipSelect = (value: LandOwnership) => {
+    setLandOwnership(value);
+    setLandOwnershipPickerOpen(false);
+    markTouched("landOwnership");
+  };
+
+  const toggleLandOwnershipPicker = () => {
+    setLandOwnershipPickerOpen((current) => {
+      const nextOpen = !current;
+
+      if (!nextOpen && !landOwnership) {
+        markTouched("landOwnership");
+      }
+
+      return nextOpen;
+    });
+  };
+
+  const handleContinue = async () => {
+    if (!isFormValid || !landOwnership) {
       setTouched({
         pondName: true,
         area: true,
         depth: true,
+        landOwnership: true,
       });
       return;
     }
+
+    await savePondDraft({
+      pondName: pondName.trim(),
+      area,
+      depth: averageDepth,
+      landOwnership,
+    });
 
     router.push("/start-journey" as never);
   };
@@ -161,6 +203,8 @@ export default function PondSetupScreen() {
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            scrollEnabled={!landOwnershipPickerOpen}
+            nestedScrollEnabled
           >
             <View style={styles.headingBlock}>
               <View style={styles.headingIcon}>
@@ -261,6 +305,93 @@ export default function PondSetupScreen() {
                     <Text style={styles.errorText}>{depthError}</Text>
                   ) : null}
                 </View>
+              </View>
+
+              <View style={[styles.fieldBlock, styles.fieldBlockLast]}>
+                <View style={styles.labelRow}>
+                  <Feather name="home" size={17} color={colors.primary} />
+                  <Text style={styles.label}>Land Ownership</Text>
+                </View>
+
+                <Pressable
+                  onPress={toggleLandOwnershipPicker}
+                  style={[
+                    styles.selectControl,
+                    landOwnershipPickerOpen && styles.selectControlActive,
+                    landOwnershipError ? styles.inputError : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.selectText,
+                      !landOwnership && styles.placeholderText,
+                    ]}
+                  >
+                    {landOwnership || "Select Land Ownership"}
+                  </Text>
+
+                  <Feather
+                    name={
+                      landOwnershipPickerOpen ? "chevron-up" : "chevron-down"
+                    }
+                    size={20}
+                    color={
+                      landOwnershipPickerOpen ? colors.primary : colors.muted
+                    }
+                  />
+                </Pressable>
+
+                {landOwnershipPickerOpen ? (
+                  <View style={styles.dropdownMenu}>
+                    <FlatList
+                      data={LAND_OWNERSHIP_OPTIONS}
+                      keyExtractor={(option) => option}
+                      style={styles.dropdownScroll}
+                      nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator
+                      persistentScrollbar={Platform.OS === "android"}
+                      renderItem={({ item: option, index }) => {
+                        const isSelected = landOwnership === option;
+                        const isLastOption =
+                          index === LAND_OWNERSHIP_OPTIONS.length - 1;
+
+                        return (
+                          <Pressable
+                            onPress={() => handleLandOwnershipSelect(option)}
+                            style={({ pressed }) => [
+                              styles.dropdownOption,
+                              isSelected && styles.dropdownOptionSelected,
+                              isLastOption && styles.dropdownOptionLast,
+                              pressed && styles.dropdownOptionPressed,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.dropdownOptionText,
+                                isSelected && styles.dropdownOptionTextSelected,
+                              ]}
+                            >
+                              {option}
+                            </Text>
+
+                            {isSelected ? (
+                              <Feather
+                                name="check"
+                                size={18}
+                                color={colors.primary}
+                              />
+                            ) : null}
+                          </Pressable>
+                        );
+                      }}
+                    />
+                  </View>
+                ) : null}
+
+                {landOwnershipError ? (
+                  <Text style={styles.errorText}>{landOwnershipError}</Text>
+                ) : null}
               </View>
             </View>
 
@@ -408,6 +539,81 @@ const styles = StyleSheet.create({
   },
   fieldBlock: {
     marginBottom: 18,
+  },
+  fieldBlockLast: {
+    marginBottom: 0,
+  },
+  selectControl: {
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.paleBlue,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  selectControlActive: {
+    borderColor: colors.primary,
+  },
+  selectText: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "700",
+    marginRight: 8,
+  },
+  placeholderText: {
+    color: colors.muted,
+    fontWeight: "500",
+  },
+  dropdownMenu: {
+    marginTop: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    overflow: "hidden",
+    shadowColor: colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 4,
+  },
+  dropdownScroll: {
+    maxHeight: 220,
+  },
+  dropdownOption: {
+    minHeight: 50,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  dropdownOptionLast: {
+    borderBottomWidth: 0,
+  },
+  dropdownOptionSelected: {
+    backgroundColor: colors.softBlue,
+  },
+  dropdownOptionPressed: {
+    opacity: 0.82,
+  },
+  dropdownOptionText: {
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: "600",
+  },
+  dropdownOptionTextSelected: {
+    color: colors.primary,
+    fontWeight: "800",
   },
   labelRow: {
     flexDirection: "row",

@@ -1,6 +1,7 @@
 
 import { useState } from "react";
 import { saveProfile } from "../services/profile";
+import { saveFarmerProfile } from "../services/local-profile";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -198,7 +199,7 @@ export default function FarmerProfileScreen() {
     setActivePicker(null);
   };
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     if (activePicker !== null) {
       blurPicker(activePicker);
       setActivePicker(null);
@@ -215,7 +216,16 @@ export default function FarmerProfileScreen() {
       return;
     }
 
-    router.replace("/pond-setup" as never);
+    await saveFarmerProfile({
+      name: name.trim(),
+      state: selectedState,
+      district,
+      language,
+    });
+
+    await saveProfile(name.trim(), selectedState, district, language);
+
+    router.replace("/home" as never);
   };
 
 
