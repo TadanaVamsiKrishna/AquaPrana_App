@@ -12,7 +12,7 @@ export async function saveProfile(
   } = await supabase.auth.getUser();
 
   return await supabase
-      .from("profiles")
+      .from("users")
       .upsert({
 
         id:user?.id,

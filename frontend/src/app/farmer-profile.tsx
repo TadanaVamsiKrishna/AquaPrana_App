@@ -198,13 +198,13 @@ export default function FarmerProfileScreen() {
     setActivePicker(null);
   };
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     if (activePicker !== null) {
       blurPicker(activePicker);
       setActivePicker(null);
       setPickerSearchQuery("");
     }
-
+  
     if (!isFormValid) {
       setTouched({
         name: true,
@@ -214,8 +214,23 @@ export default function FarmerProfileScreen() {
       });
       return;
     }
-
-    router.replace("/pond-setup" as never);
+  
+    const { data, error } = await saveProfile(
+      name,
+      selectedState,
+      district,
+      language
+    );
+  
+    console.log("Profile Data:", data);
+    console.log("Profile Error:", error);
+  
+    if (error) {
+      alert(error.message);
+      return;
+    }
+  
+    router.replace("/pond-setup");
   };
 
 

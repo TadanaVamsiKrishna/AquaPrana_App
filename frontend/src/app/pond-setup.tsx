@@ -1,4 +1,6 @@
 import { useState } from "react";
+import * as Location from "expo-location";
+import { savePond } from "../services/pond";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -57,6 +59,14 @@ export default function PondSetupScreen() {
   const [pondName, setPondName] = useState("");
   const [area, setArea] = useState("");
   const [averageDepth, setAverageDepth] = useState("");
+
+  const [location, setLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  
+  const [locationText, setLocationText] = useState("");
+
   const [touched, setTouched] = useState<TouchedFields>({
     pondName: false,
     area: false,
@@ -98,22 +108,88 @@ export default function PondSetupScreen() {
     setAverageDepth(sanitizeDecimalInput(value));
   };
 
-  const handleCaptureLocation = () => {
-    Alert.alert("Location", "GPS integration will be added later.");
-  };
-
-  const handleContinue = () => {
-    if (!isFormValid) {
-      setTouched({
-        pondName: true,
-        area: true,
-        depth: true,
+  const handleCaptureLocation = async () => {
+    try {
+      // Request location permission
+      const { status } = await Location.requestForegroundPermissionsAsync();
+  
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "Location permission is required."
+        );
+        return;
+      }
+  
+      // Get current GPS location
+      const currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
       });
-      return;
+  
+      const latitude = currentLocation.coords.latitude;
+      const longitude = currentLocation.coords.longitude;
+  
+      // Save coordinates
+      setLocation({
+        latitude,
+        longitude,
+      });
+  
+      // Display coordinates on screen
+      setLocationText(
+        `Latitude: ${latitude}\nLongitude: ${longitude}`
+      );
+  
+    } catch (error) {
+      console.error(error);
+      Alert.alert(
+        "Error",
+        "Unable to get current location."
+      );
+    }
+  };
+  const handleContinue = async () => {
+
+    if (!isFormValid) {
+        setTouched({
+            pondName: true,
+            area: true,
+            depth: true,
+        });
+
+        return;
     }
 
-    router.push("/start-journey" as never);
-  };
+    const { error } = await savePond(
+
+        pondName,
+
+        area,
+
+        averageDepth,
+
+        location?.latitude,
+
+        location?.longitude
+
+    );
+
+    if (error) {
+      console.log("Supabase Error:", error);
+  
+      Alert.alert(
+        "Supabase Error",
+        JSON.stringify(error, null, 2)
+      );
+  
+      return;
+  }
+
+    Alert.alert("Success", "Pond Saved Successfully");
+
+    router.push("/start-journey");
+
+};
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -280,6 +356,7 @@ export default function PondSetupScreen() {
 
               <Pressable
                 onPress={handleCaptureLocation}
+
                 style={({ pressed }) => [
                   styles.locationButton,
                   pressed && styles.locationButtonPressed,
@@ -289,6 +366,37 @@ export default function PondSetupScreen() {
                 <Feather name="navigation" size={18} color={colors.primary} />
                 <Text style={styles.locationButtonText}>Capture Location</Text>
               </Pressable>
+
+              {location && (
+  <View
+    style={{
+      marginTop: 15,
+      padding: 12,
+      backgroundColor: colors.softBlue,
+      borderRadius: 10,
+    }}
+  >
+    <Text
+      style={{
+        fontWeight: "700",
+        color: colors.text,
+        fontSize: 15,
+      }}
+    >
+      📍 Current Location
+    </Text>
+
+    <Text
+      style={{
+        marginTop: 6,
+        color: colors.text,
+      }}
+    >
+      {locationText}
+    </Text>
+  </View>
+)}
+
             </View>
           </ScrollView>
 
