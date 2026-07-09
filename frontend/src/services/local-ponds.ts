@@ -11,9 +11,15 @@ export type PondReadings = {
   potassium: string;
 };
 
+type PondNameSource = {
+  pondName?: string;
+  name?: string;
+};
+
 export type StoredPond = {
   id: string;
   pondName: string;
+  name?: string;
   area: string;
   depth: string;
   species: string;
@@ -36,7 +42,7 @@ export type PondDraft = {
   pondName: string;
   area: string;
   depth: string;
-  landOwnership: LandOwnership;
+  landOwnership?: LandOwnership;
 };
 
 const PONDS_KEY = "ponds";
@@ -98,6 +104,25 @@ export const getWaterQualityStatus = ({
   return "Poor";
 };
 
+export const resolvePondName = (
+  pond: PondNameSource,
+  fallback = "My Pond",
+) => {
+  const pondName = pond.pondName?.trim() || pond.name?.trim();
+  return pondName || fallback;
+};
+
+export const normalizeStoredPond = (
+  pond: StoredPond & PondNameSource,
+): StoredPond => {
+  const pondName = pond.pondName?.trim() || pond.name?.trim() || "";
+
+  return {
+    ...pond,
+    pondName,
+  };
+};
+
 export const getPonds = async (): Promise<StoredPond[]> => {
   const raw = await AsyncStorage.getItem(PONDS_KEY);
 
@@ -107,19 +132,22 @@ export const getPonds = async (): Promise<StoredPond[]> => {
 
   try {
     const parsed = JSON.parse(raw) as StoredPond[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeStoredPond) : [];
   } catch {
     return [];
   }
 };
 
 export const savePond = async (pond: StoredPond) => {
+  const normalizedPond = normalizeStoredPond(pond);
   const ponds = await getPonds();
-  const existingIndex = ponds.findIndex((item) => item.id === pond.id);
+  const existingIndex = ponds.findIndex((item) => item.id === normalizedPond.id);
   const nextPonds =
     existingIndex >= 0
-      ? ponds.map((item, index) => (index === existingIndex ? pond : item))
-      : [...ponds, pond];
+      ? ponds.map((item, index) =>
+          index === existingIndex ? normalizedPond : item,
+        )
+      : [...ponds, normalizedPond];
 
   await AsyncStorage.setItem(PONDS_KEY, JSON.stringify(nextPonds));
 };
@@ -148,5 +176,6 @@ export const clearPondDraft = async () => {
 
 export const getPondById = async (id: string): Promise<StoredPond | null> => {
   const ponds = await getPonds();
-  return ponds.find((pond) => pond.id === id) ?? null;
+  const pond = ponds.find((item) => item.id === id);
+  return pond ? normalizeStoredPond(pond) : null;
 };

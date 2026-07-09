@@ -1,5 +1,6 @@
 import { useState } from "react";
 import * as Location from "expo-location";
+import { savePondDraft } from "../services/local-ponds";
 import { savePond } from "../services/pond";
 import {
   Alert,
@@ -176,17 +177,23 @@ export default function PondSetupScreen() {
  
     if (error) {
       console.log("Supabase Error:", error);
- 
+
       Alert.alert(
         "Supabase Error",
         JSON.stringify(error, null, 2)
       );
- 
+
       return;
-  }
- 
+    }
+
+    await savePondDraft({
+      pondName: pondName.trim(),
+      area,
+      depth: averageDepth,
+    });
+
     Alert.alert("Success", "Pond Saved Successfully");
- 
+
     router.push("/start-journey");
  
 };

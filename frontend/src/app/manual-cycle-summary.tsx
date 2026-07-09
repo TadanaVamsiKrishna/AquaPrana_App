@@ -247,7 +247,7 @@ export default function ManualCycleSummaryScreen() {
 
     await savePond({
       id: Date.now().toString(),
-      pondName: draft?.pondName ?? `${species} Pond`,
+      pondName: draft?.pondName?.trim() || "",
       area: draft?.area ?? "",
       depth: draft?.depth ?? "",
       species,

@@ -191,7 +191,7 @@ export default function CropDetailsScreen() {
 
     await savePond({
       id: Date.now().toString(),
-      pondName: draft?.pondName ?? "My Pond",
+      pondName: draft?.pondName?.trim() || "",
       area: draft?.area ?? "",
       depth: draft?.depth ?? "",
       species,

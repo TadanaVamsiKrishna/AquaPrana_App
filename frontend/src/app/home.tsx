@@ -18,7 +18,11 @@ import {
   type OverallWaterQuality,
 } from "../lib/water-quality";
 import { getFarmerProfile, getGreeting } from "../services/local-profile";
-import { getPonds, type StoredPond } from "../services/local-ponds";
+import {
+  getPonds,
+  resolvePondName,
+  type StoredPond,
+} from "../services/local-ponds";
 
 const colors = {
   primary: "#0A84FF",
@@ -222,7 +226,9 @@ function PondListCard({
       accessibilityRole="button"
     >
       <View style={styles.pondCardHeader}>
-        <Text style={styles.pondName}>{pond.pondName}</Text>
+        <Text style={styles.pondName}>
+          {resolvePondName(pond)}
+        </Text>
         <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
       </View>
 
@@ -310,16 +316,32 @@ export default function HomeScreen() {
       <View style={styles.screen}>
         <View style={styles.heroHeader}>
           <View style={styles.brandRow}>
-            <View style={styles.brandLogo}>
-              <Text style={styles.brandLogoText}>🦐</Text>
-            </View>
-            <View style={styles.brandCopy}>
-              <Text style={styles.brandName}>AQUAPRANA</Text>
-              <Text style={styles.brandGreeting}>
-                {getGreeting()}, {farmerName}
-              </Text>
-            </View>
-            <Pressable style={styles.notificationButton} accessibilityRole="button">
+            <Pressable
+              onPress={() => router.push("/profile" as never)}
+              style={({ pressed }) => [
+                styles.profileEntry,
+                pressed && styles.pressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Open profile"
+            >
+              <View style={styles.brandLogo}>
+                <Text style={styles.brandLogoText}>🦐</Text>
+              </View>
+              <View style={styles.brandCopy}>
+                <Text style={styles.brandName}>AQUAPRANA</Text>
+                <Text style={styles.brandGreeting}>
+                  {getGreeting()}, {farmerName}
+                </Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              onPress={() => router.push("/notifications" as never)}
+              style={styles.notificationButton}
+              accessibilityRole="button"
+              accessibilityLabel="Open notifications"
+            >
               <Feather name="bell" size={20} color={colors.white} />
               <View style={styles.notificationDot} />
             </Pressable>
@@ -464,6 +486,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  profileEntry: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
   },
   brandLogo: {
     width: 44,

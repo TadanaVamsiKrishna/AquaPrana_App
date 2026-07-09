@@ -42,6 +42,18 @@
 
 import { supabase } from "../lib/supabase";
 
+export type SupabasePondRecord = {
+  id: string;
+  name: string;
+  area_acres?: number | null;
+  depth_ft?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+};
+
+export const mapSupabasePondName = (record: { name?: string | null }) =>
+  record.name?.trim() ?? "";
+
 export async function savePond(
   pondName: string,
   area: string,
@@ -80,4 +92,29 @@ export async function savePond(
   console.log("Insert Error:", error);
 
   return { data, error };
+}
+
+export async function getSupabasePonds() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return {
+      data: [] as SupabasePondRecord[],
+      error: {
+        message: "User not logged in",
+      },
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("ponds")
+    .select("id, name, area_acres, depth_ft, latitude, longitude")
+    .eq("user_id", user.id);
+
+  return {
+    data: (data ?? []) as SupabasePondRecord[],
+    error,
+  };
 }
