@@ -1,7 +1,6 @@
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StatusBar,
@@ -13,6 +12,10 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PondBottomNav } from "../components/pond-bottom-nav";
+import {
+  getClosedCyclesForPond,
+  type ClosedCycle,
+} from "../services/local-cycle-history";
 import { getPondById, type StoredPond } from "../services/local-ponds";
 
 const colors = {
@@ -33,6 +36,7 @@ export default function PondCyclesScreen() {
   const { pondId } = useLocalSearchParams<{ pondId: string }>();
 
   const [pond, setPond] = useState<StoredPond | null>(null);
+  const [previousCycles, setPreviousCycles] = useState<ClosedCycle[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const loadData = useCallback(async () => {
@@ -41,8 +45,12 @@ export default function PondCyclesScreen() {
     }
 
     setIsLoading(true);
-    const pondData = await getPondById(pondId);
+    const [pondData, closedCycles] = await Promise.all([
+      getPondById(pondId),
+      getClosedCyclesForPond(pondId),
+    ]);
     setPond(pondData);
+    setPreviousCycles(closedCycles);
     setIsLoading(false);
   }, [pondId]);
 
@@ -51,6 +59,30 @@ export default function PondCyclesScreen() {
       loadData();
     }, [loadData]),
   );
+
+  const handleGenerateReport = () => {
+    if (!pondId) {
+      return;
+    }
+
+    router.push({
+      pathname: "/cycle-report",
+      params: { pondId },
+    } as never);
+  };
+
+  const handleCloseCycle = () => {
+    if (!pondId) {
+      return;
+    }
+
+    router.push({
+      pathname: "/close-cycle",
+      params: { pondId },
+    } as never);
+  };
+
+  const recordCount = 1 + previousCycles.length;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -71,7 +103,9 @@ export default function PondCyclesScreen() {
         >
           <View style={styles.titleRow}>
             <Text style={styles.pageTitle}>Cycle History</Text>
-            <Text style={styles.recordCount}>1 Record</Text>
+            <Text style={styles.recordCount}>
+              {recordCount} {recordCount === 1 ? "Record" : "Records"}
+            </Text>
           </View>
 
           {isLoading ? (
@@ -122,17 +156,13 @@ export default function PondCyclesScreen() {
 
                 <View style={styles.actionRow}>
                   <Pressable
-                    onPress={() =>
-                      Alert.alert("Report", "Cycle report generation coming soon.")
-                    }
+                    onPress={handleGenerateReport}
                     style={styles.outlineButton}
                   >
                     <Text style={styles.outlineButtonText}>Generate Report</Text>
                   </Pressable>
                   <Pressable
-                    onPress={() =>
-                      Alert.alert("Close Cycle", "Cycle closing coming soon.")
-                    }
+                    onPress={handleCloseCycle}
                     style={styles.primaryButton}
                   >
                     <Feather name="power" size={14} color={colors.white} />
@@ -142,11 +172,47 @@ export default function PondCyclesScreen() {
               </View>
 
               <Text style={styles.sectionTitle}>Previous Cycles</Text>
-              <View style={styles.emptyPrevious}>
-                <Text style={styles.emptyPreviousText}>
-                  No previous cycles recorded for this pond yet.
-                </Text>
-              </View>
+              {previousCycles.length === 0 ? (
+                <View style={styles.emptyPrevious}>
+                  <Text style={styles.emptyPreviousText}>
+                    No previous cycles recorded for this pond yet.
+                  </Text>
+                </View>
+              ) : (
+                previousCycles.map((cycle) => (
+                  <View key={cycle.id} style={styles.previousCard}>
+                    <View style={styles.previousHeader}>
+                      <View style={styles.previousCopy}>
+                        <Text style={styles.previousSpecies}>{cycle.species}</Text>
+                        <Text style={styles.previousDates}>
+                          {cycle.stockingDate} - {cycle.harvestDate}
+                        </Text>
+                      </View>
+                      <Feather name="chevron-right" size={18} color={colors.muted} />
+                    </View>
+
+                    <View style={styles.previousMetrics}>
+                      <View style={styles.previousMetric}>
+                        <Text style={styles.previousMetricLabel}>FCR</Text>
+                        <Text style={styles.previousMetricValue}>
+                          {cycle.finalFcr}
+                        </Text>
+                      </View>
+                      <View style={styles.previousMetric}>
+                        <Text style={styles.previousMetricLabel}>Survival</Text>
+                        <Text
+                          style={[
+                            styles.previousMetricValue,
+                            styles.survivalValue,
+                          ]}
+                        >
+                          {cycle.finalSurvival}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                ))
+              )}
             </>
           )}
         </ScrollView>
@@ -324,5 +390,53 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontWeight: "500",
+  },
+  previousCard: {
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+    gap: 12,
+  },
+  previousHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  previousCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  previousSpecies: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  previousDates: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  previousMetrics: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  previousMetric: {
+    flex: 1,
+    backgroundColor: colors.background,
+    borderRadius: 10,
+    padding: 10,
+    gap: 2,
+  },
+  previousMetricLabel: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  previousMetricValue: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "900",
   },
 });

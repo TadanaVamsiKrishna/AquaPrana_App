@@ -11,6 +11,18 @@ export type SupabasePondRecord = {
   depth_ft?: number | null;
   latitude?: number | null;
   longitude?: number | null;
+  species?: string | null;
+  stocking_date?: string | null;
+  stocking_density?: number | string | null;
+  cycle_day?: number | string | null;
+  biomass?: string | null;
+  survival_rate?: string | null;
+  water_quality_status?: string | null;
+  last_log_time?: string | null;
+  archived?: boolean | null;
+  is_active?: boolean | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export const mapSupabasePondName = (record: { name?: string | null }) =>
@@ -74,8 +86,23 @@ export async function getSupabasePonds() {
 
   const { data, error } = await supabase
     .from("ponds")
-    .select("id, name, area_acres, depth_ft, latitude, longitude")
+    .select(
+      "id, name, area_acres, depth_ft, latitude, longitude, species, stocking_date, stocking_density, cycle_day, biomass, survival_rate, water_quality_status, last_log_time, archived, is_active, created_at, updated_at",
+    )
     .eq("user_id", user.id);
+
+  // Fall back to core columns if extended schema is not available yet.
+  if (error) {
+    const fallback = await supabase
+      .from("ponds")
+      .select("id, name, area_acres, depth_ft, latitude, longitude")
+      .eq("user_id", user.id);
+
+    return {
+      data: (fallback.data ?? []) as SupabasePondRecord[],
+      error: fallback.error,
+    };
+  }
 
   return {
     data: (data ?? []) as SupabasePondRecord[],

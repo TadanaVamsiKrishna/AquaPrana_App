@@ -194,6 +194,7 @@ export default function CropDetailsScreen() {
         harvestWindowEnd = formatDisplayDate(harvestWindow.latest);
       }
     }
+
     console.log("Crop Cycle Pond ID:", pondId);
     await createCropCycle(pondId, {
       category,
@@ -201,6 +202,9 @@ export default function CropDetailsScreen() {
       stockingDensity: Number(stockingDensity),
       stockingDate,
       seedSupplier,
+
+
+    
     });
  
     router.replace("/home" as never);

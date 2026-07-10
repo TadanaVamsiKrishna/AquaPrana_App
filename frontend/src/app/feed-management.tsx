@@ -21,6 +21,7 @@ import {
   saveFeedSchedule,
   type FeedCalculationRule,
 } from "../services/local-feed-schedule";
+import { resolvePondId } from "../lib/pond-route";
 
 const colors = {
   primary: "#0A84FF",
@@ -56,7 +57,8 @@ const sanitizeDecimalInput = (value: string) => {
 
 export default function FeedManagementScreen() {
   const router = useRouter();
-  const { pondId } = useLocalSearchParams<{ pondId: string }>();
+  const { pondId: pondIdParam } = useLocalSearchParams<{ pondId: string }>();
+  const pondId = resolvePondId(pondIdParam);
 
   const [feedsPerDay, setFeedsPerDay] = useState(4);
   const [feedingTimes, setFeedingTimes] = useState<string[]>(
@@ -121,10 +123,14 @@ export default function FeedManagementScreen() {
       initialQuantity,
       calculationRule,
       feedBrand,
+      updatedAt: new Date().toISOString(),
     });
 
     setIsSaving(false);
-    router.back();
+    router.replace({
+      pathname: "/daily-log",
+      params: { pondId },
+    } as never);
   };
 
   return (

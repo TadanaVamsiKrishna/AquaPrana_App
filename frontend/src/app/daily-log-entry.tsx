@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -11,14 +12,19 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  pickRecordImage,
+} from "../lib/record-images";
 import {
   getParameterStatus,
   WATER_PARAMETERS,
   type WaterParameterKey,
 } from "../lib/water-quality";
+
 import { saveDailyLog } from "../services/dailyLogs";
 import {
   getSupabasePondById,
@@ -26,6 +32,7 @@ import {
 } from "../services/pond";
 
 import type { StoredPond } from "../services/local-ponds";
+
 
 const colors = {
   primary: "#0A84FF",
@@ -177,6 +184,8 @@ function ParameterRow({
   safeRange,
   statusKey,
   touched,
+  photoUri,
+  isPhotoLoading,
   onChangeText,
   onPhotoPress,
 }: {
@@ -185,6 +194,8 @@ function ParameterRow({
   safeRange: string;
   statusKey: WaterParameterKey;
   touched: boolean;
+  photoUri?: string;
+  isPhotoLoading?: boolean;
   onChangeText: (value: string) => void;
   onPhotoPress: () => void;
 }) {
@@ -215,14 +226,26 @@ function ParameterRow({
 
       <Pressable
         onPress={onPhotoPress}
+        disabled={isPhotoLoading}
         style={({ pressed }) => [
           styles.photoIconButton,
           pressed && styles.pressed,
+          isPhotoLoading && styles.photoIconButtonDisabled,
         ]}
         accessibilityRole="button"
         accessibilityLabel={`Upload photo for ${label}`}
       >
-        <Feather name="camera" size={16} color={colors.muted} />
+        {isPhotoLoading ? (
+          <ActivityIndicator size="small" color={colors.primary} />
+        ) : photoUri ? (
+          <Image
+            source={{ uri: photoUri }}
+            style={styles.parameterPhotoPreview}
+            contentFit="cover"
+          />
+        ) : (
+          <Feather name="camera" size={16} color={colors.muted} />
+        )}
       </Pressable>
     </View>
   );
@@ -264,8 +287,10 @@ function ManagementRow({
 
 export default function DailyLogEntryScreen() {
   const router = useRouter();
-  const { pondId } = useLocalSearchParams<{ pondId: string }>();
+  // const { pondId: pondIdParam } = useLocalSearchParams<{ pondId: string }>();
+  // const pondId = resolvePondId(pondIdParam);
 
+  const { pondId } = useLocalSearchParams<{ pondId?: string }>();
   const [pond, setPond] = useState<StoredPond | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [observationTime, setObservationTime] = useState(getObservationTime());
@@ -280,6 +305,15 @@ export default function DailyLogEntryScreen() {
     magnesium: false,
     potassium: false,
   });
+  const [parameterPhotos, setParameterPhotos] = useState<
+    Partial<Record<keyof TouchedWaterFields, string>>
+  >({});
+  const [photoLoadingKey, setPhotoLoadingKey] = useState<
+    keyof TouchedWaterFields | "checkTray" | null
+  >(null);
+  const [checkTrayPhoto, setCheckTrayPhoto] = useState<string | null>(null);
+  const isPickingPhotoRef = useRef(false);
+
 
   const loadPond = useCallback(async () => {
     if (!pondId) {
@@ -325,12 +359,40 @@ export default function DailyLogEntryScreen() {
       console.log(err);
       Alert.alert("Error", "Unable to load pond.");
     }
+
   }, [pondId]);
+
+  // useEffect(() => {
+  //   if (!pondId) {
+  //     return;
+  //   }
+
+  //   resetForm();
+  //   void loadPondMeta();
+  // }, [pondId, loadPondMeta, resetForm]);
+
+  useEffect(() => {
+    if (!pondId) return;
+  
+    void loadPond();
+  }, [pondId, loadPond]);
+
+  // useFocusEffect(
+  //   useCallback(() => {
+  //     if (isPickingPhotoRef.current) {
+  //       return;
+  //     }
+
+  //     void loadPondMeta();
+  //   }, [loadPondMeta]),
+  // );
+
 
   useFocusEffect(
     useCallback(() => {
+  
       loadPond();
-    }, [loadPond]),
+    }, [ loadPond]),
   );
 
   const updateForm = (key: keyof FormState, value: string) => {
@@ -345,19 +407,61 @@ export default function DailyLogEntryScreen() {
     updateForm(key, sanitizeDecimalInput(value));
   };
 
-  const handleParameterPhoto = (label: string) => {
-    Alert.alert(
-      "Photo upload",
-      `Photo capture for ${label} will be added soon.`,
-    );
+  const handleParameterPhoto = async (fieldKey: keyof TouchedWaterFields) => {
+    isPickingPhotoRef.current = true;
+    setPhotoLoadingKey(fieldKey);
+
+    try {
+      const picked = await pickRecordImage();
+      if (picked?.uri) {
+        setParameterPhotos((current) => ({
+          ...current,
+          [fieldKey]: picked.uri,
+        }));
+      }
+    } catch (error) {
+      Alert.alert(
+        "Photo error",
+        error instanceof Error
+          ? error.message
+          : "Unable to open camera or gallery.",
+      );
+    } finally {
+      setPhotoLoadingKey(null);
+      isPickingPhotoRef.current = false;
+    }
+  };
+
+  const handleCheckTrayPhoto = async () => {
+    isPickingPhotoRef.current = true;
+    setPhotoLoadingKey("checkTray");
+
+    try {
+      const picked = await pickRecordImage();
+      if (picked?.uri) {
+        setCheckTrayPhoto(picked.uri);
+      }
+    } catch (error) {
+      Alert.alert(
+        "Photo error",
+        error instanceof Error
+          ? error.message
+          : "Unable to open camera or gallery.",
+      );
+    } finally {
+      setPhotoLoadingKey(null);
+      isPickingPhotoRef.current = false;
+    }
   };
 
   const handleSave = async () => {
     if (!pondId) {
+
       Alert.alert("Pond not found");
       return;
     }
   
+
     setIsSaving(true);
   
     try {
@@ -400,12 +504,14 @@ export default function DailyLogEntryScreen() {
     } catch (e) {
       console.log(e);
 
+
       const message =
         e instanceof Error && e.message
           ? e.message
           : "Unable to save daily log.";
 
       Alert.alert("Error", message);
+
     } finally {
       setIsSaving(false);
     }
@@ -433,10 +539,11 @@ export default function DailyLogEntryScreen() {
             </Pressable>
             <Text style={styles.topBarTitle}>Daily Log Entry</Text>
             <Pressable
-              onPress={handleSave}
-              disabled={isSaving}
+              onPress={() => void handleSave()}
+              disabled={isSaving || !pondId}
               style={({ pressed }) => [
                 styles.saveButton,
+                (isSaving || !pondId) && styles.saveButtonDisabled,
                 pressed && styles.pressed,
               ]}
               accessibilityRole="button"
@@ -491,8 +598,10 @@ export default function DailyLogEntryScreen() {
                     statusKey={parameter.key}
                     touched={touchedWater[fieldKey]}
                     value={form[fieldKey]}
+                    photoUri={parameterPhotos[fieldKey]}
+                    isPhotoLoading={photoLoadingKey === fieldKey}
                     onChangeText={(value) => updateWaterField(fieldKey, value)}
-                    onPhotoPress={() => handleParameterPhoto(parameter.label)}
+                    onPhotoPress={() => void handleParameterPhoto(fieldKey)}
                   />
                 );
               })}
@@ -578,19 +687,25 @@ export default function DailyLogEntryScreen() {
               </View>
 
               <Pressable
-                onPress={() =>
-                  Alert.alert(
-                    "Photo upload",
-                    "Check tray photo analysis will be added soon.",
-                  )
-                }
+                onPress={() => void handleCheckTrayPhoto()}
+                disabled={photoLoadingKey === "checkTray"}
                 style={({ pressed }) => [
                   styles.photoUpload,
                   pressed && styles.pressed,
                 ]}
                 accessibilityRole="button"
               >
-                <Feather name="image" size={22} color={colors.primary} />
+                {photoLoadingKey === "checkTray" ? (
+                  <ActivityIndicator color={colors.primary} />
+                ) : checkTrayPhoto ? (
+                  <Image
+                    source={{ uri: checkTrayPhoto }}
+                    style={styles.checkTrayPreview}
+                    contentFit="cover"
+                  />
+                ) : (
+                  <Feather name="image" size={22} color={colors.primary} />
+                )}
               </Pressable>
             </View>
           </ScrollView>
@@ -636,6 +751,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
+    minWidth: 64,
+    alignItems: "center",
+  },
+  saveButtonDisabled: {
+    opacity: 0.55,
   },
   saveButtonText: {
     color: colors.primary,
@@ -750,6 +870,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginTop: 22,
+    overflow: "hidden",
+  },
+  photoIconButtonDisabled: {
+    opacity: 0.7,
+  },
+  parameterPhotoPreview: {
+    width: "100%",
+    height: "100%",
+  },
+  checkTrayPreview: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 12,
   },
   managementRow: {
     flexDirection: "row",
@@ -837,6 +970,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.softBlue,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
   pressed: {
     opacity: 0.88,

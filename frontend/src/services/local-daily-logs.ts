@@ -81,6 +81,36 @@ export const getLogsForPond = async (
   return logs.filter((log) => log.pondId === pondId);
 };
 
+export const getTodayLogCountForPond = async (pondId: string) => {
+  const logs = await getLogsForPond(pondId);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return logs.filter((log) => {
+    const logDate = new Date(log.observedAt);
+    logDate.setHours(0, 0, 0, 0);
+    return logDate.getTime() === today.getTime();
+  }).length;
+};
+
+export const getPondLogTotals = async (pondId: string) => {
+  const logs = await getLogsForPond(pondId);
+
+  return logs.reduce(
+    (totals, log) => {
+      const feed = Number(log.feedQty);
+      const mortality = Number(log.mortalityCount);
+
+      return {
+        cumulativeFeed:
+          totals.cumulativeFeed + (Number.isFinite(feed) ? feed : 0),
+        mortality: totals.mortality + (Number.isFinite(mortality) ? mortality : 0),
+      };
+    },
+    { cumulativeFeed: 0, mortality: 0 },
+  );
+};
+
 export const saveDailyLog = async (entry: DailyLogEntry) => {
   const logs = await getDailyLogs();
   await AsyncStorage.setItem(LOGS_KEY, JSON.stringify([entry, ...logs]));

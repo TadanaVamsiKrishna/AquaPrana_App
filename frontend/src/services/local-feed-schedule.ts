@@ -9,6 +9,7 @@ export type FeedSchedule = {
   initialQuantity: string;
   calculationRule: FeedCalculationRule;
   feedBrand: string;
+  updatedAt?: string;
 };
 
 const SCHEDULE_KEY = "feed_schedules";

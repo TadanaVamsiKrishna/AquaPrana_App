@@ -246,8 +246,9 @@ export default function ManualCycleSummaryScreen() {
       : "—";
 
     await savePond({
-      id: Date.now().toString(),
+      id: draft?.id ?? Date.now().toString(),
       pondName: draft?.pondName?.trim() || "",
+      name: draft?.pondName?.trim() || "",
       area: draft?.area ?? "",
       depth: draft?.depth ?? "",
       species,
@@ -274,6 +275,8 @@ export default function ManualCycleSummaryScreen() {
         magnesium: "",
         potassium: "",
       },
+      isActive: true,
+      archived: false,
     });
 
     await clearPondDraft();

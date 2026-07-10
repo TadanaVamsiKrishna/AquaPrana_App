@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as Location from "expo-location";
-import { savePondDraft } from "../services/local-ponds";
 
+import { savePondDraft } from "../services/local-ponds";
 import { savePond } from "../services/pond";
 import {
   Alert,
@@ -109,6 +109,8 @@ export default function PondSetupScreen() {
   const handleDepthChange = (value: string) => {
     setAverageDepth(sanitizeDecimalInput(value));
   };
+
+  const [localPondId] = useState(() => Date.now().toString());
  
   const handleCaptureLocation = async () => {
     try {
@@ -151,17 +153,42 @@ export default function PondSetupScreen() {
     }
   };
   const handleContinue = async () => {
- 
     if (!isFormValid) {
-        setTouched({
-            pondName: true,
-            area: true,
-            depth: true,
-        });
- 
-        return;
+      setTouched({
+        pondName: true,
+        area: true,
+        depth: true,
+      });
+
+      return;
     }
+
+    await savePondDraft({
+      id: localPondId,
+      pondName: pondName.trim(),
+      area,
+      depth: averageDepth,
+    });
+
+    await saveLocalPond({
+      id: localPondId,
+      pondName: pondName.trim(),
+      name: pondName.trim(),
+      area,
+      depth: averageDepth,
+      species: "",
+      stockingDate: "",
+      stockingDensity: "",
+      harvestWindowStart: "",
+      harvestWindowEnd: "",
+      cycleDay: "1",
+      biomass: "—",
+      survivalRate: "—",
+      waterQualityStatus: "Not logged",
+      lastLogTime: "—",
+    });
  
+
     const { data, error } = await savePond(
  
         pondName,
@@ -174,6 +201,7 @@ export default function PondSetupScreen() {
  
         location?.longitude
  
+
     );
     console.log("Created Pond ID:", data?.id);
  
@@ -188,13 +216,8 @@ export default function PondSetupScreen() {
       return;
     }
 
-    await savePondDraft({
-      pondName: pondName.trim(),
-      area,
-      depth: averageDepth,
-    });
-
     Alert.alert("Success", "Pond Saved Successfully");
+
 
     router.push({
       pathname: "/start-journey",
@@ -204,6 +227,7 @@ export default function PondSetupScreen() {
     });
  
 };
+
  
   return (
     <SafeAreaView style={styles.safeArea}>

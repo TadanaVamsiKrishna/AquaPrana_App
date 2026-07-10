@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -15,6 +16,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   pickImageFromCamera,
   pickImagesFromGallery,
+  pickSingleImage,
+  promptImageSource,
+  uploadImageToSupabaseStorage,
 } from "../lib/record-images";
 
 const colors = {
@@ -36,6 +40,8 @@ type RecordOption = "upload" | "manual" | "none";
 type RecordImage = {
   id: string;
   uri: string;
+  fileName: string;
+  remoteUrl?: string | null;
 };
 
 type RecordOptionConfig = {
@@ -92,43 +98,146 @@ export default function JoinExistingCycleScreen() {
   const router = useRouter();
   const [selectedOption, setSelectedOption] = useState<RecordOption>("upload");
   const [recordImages, setRecordImages] = useState<RecordImage[]>([]);
+  const [isPicking, setIsPicking] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const handleOptionSelect = (option: RecordOption) => {
     setSelectedOption(option);
   };
 
-  const appendImages = (uris: string[]) => {
+  const appendImages = (
+    images: { uri: string; fileName?: string | null; remoteUrl?: string | null }[],
+  ) => {
     setRecordImages((current) => [
       ...current,
-      ...uris.map((uri) => ({ id: createImageId(uri), uri })),
+      ...images.map((image) => ({
+        id: createImageId(image.uri),
+        uri: image.uri,
+        fileName: image.fileName || image.uri.split("/").pop() || "image.jpg",
+        remoteUrl: image.remoteUrl ?? null,
+      })),
     ]);
   };
 
   const handleTakePhoto = async () => {
-    const uris = await pickImageFromCamera();
-    if (uris) {
-      appendImages(uris);
+    setIsPicking(true);
+    try {
+      const uris = await pickImageFromCamera();
+      if (uris) {
+        appendImages(uris.map((uri) => ({ uri })));
+      }
+    } catch (error) {
+      Alert.alert(
+        "Camera error",
+        error instanceof Error ? error.message : "Unable to open camera.",
+      );
+    } finally {
+      setIsPicking(false);
     }
   };
 
   const handleChooseGallery = async () => {
-    const uris = await pickImagesFromGallery();
-    if (uris) {
-      appendImages(uris);
+    setIsPicking(true);
+    try {
+      const uris = await pickImagesFromGallery();
+      if (uris) {
+        appendImages(uris.map((uri) => ({ uri })));
+      }
+    } catch (error) {
+      Alert.alert(
+        "Gallery error",
+        error instanceof Error ? error.message : "Unable to open gallery.",
+      );
+    } finally {
+      setIsPicking(false);
     }
+  };
+
+  const handleUploadButtonPress = () => {
+    if (recordImages.length === 0) {
+      promptImageSource(async (source) => {
+        setIsPicking(true);
+        try {
+          const picked = await pickSingleImage(source);
+          if (picked) {
+            appendImages([picked]);
+          }
+        } catch (error) {
+          Alert.alert(
+            "Picker error",
+            error instanceof Error ? error.message : "Unable to pick image.",
+          );
+        } finally {
+          setIsPicking(false);
+        }
+      });
+      return;
+    }
+
+    void handleUploadRecords();
   };
 
   const handleRemoveImage = (id: string) => {
     setRecordImages((current) => current.filter((image) => image.id !== id));
   };
 
-  const handleUploadRecords = () => {
-    Alert.alert(
-      "Upload records",
-      `Ready to upload ${recordImages.length} photo${
-        recordImages.length === 1 ? "" : "s"
-      }.`,
-    );
+  const handleUploadRecords = async () => {
+    if (recordImages.length === 0) {
+      Alert.alert("No images", "Select at least one image before uploading.");
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      const uploaded = await Promise.all(
+        recordImages.map(async (image) => {
+          if (image.remoteUrl) {
+            return image;
+          }
+
+          const result = await uploadImageToSupabaseStorage({
+            uri: image.uri,
+            fileName: image.fileName,
+            folder: "existing-cycle-records",
+          });
+
+          return {
+            ...image,
+            remoteUrl: result.remoteUrl,
+          };
+        }),
+      );
+
+      setRecordImages(uploaded);
+
+      const uploadedCount = uploaded.filter((image) => image.remoteUrl).length;
+      const localOnlyCount = uploaded.length - uploadedCount;
+
+      if (uploadedCount > 0 && localOnlyCount === 0) {
+        Alert.alert(
+          "Upload complete",
+          `${uploadedCount} image${uploadedCount === 1 ? "" : "s"} uploaded successfully.`,
+        );
+      } else if (uploadedCount > 0) {
+        Alert.alert(
+          "Partially uploaded",
+          `${uploadedCount} uploaded to storage. ${localOnlyCount} kept locally because storage upload failed.`,
+        );
+      } else {
+        Alert.alert(
+          "Saved locally",
+          "Images are ready on this device. Supabase Storage upload was unavailable, so remote URLs were not created.",
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        "Upload failed",
+        error instanceof Error ? error.message : "Unable to upload images.",
+      );
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
@@ -225,6 +334,9 @@ export default function JoinExistingCycleScreen() {
                           style={styles.previewImage}
                           contentFit="cover"
                         />
+                        <Text style={styles.previewFileName} numberOfLines={1}>
+                          {image.fileName}
+                        </Text>
                         <Pressable
                           onPress={() => handleRemoveImage(image.id)}
                           style={({ pressed }) => [
@@ -255,21 +367,31 @@ export default function JoinExistingCycleScreen() {
 
                 <Pressable
                   onPress={handleTakePhoto}
+                  disabled={isPicking || isUploading}
                   style={({ pressed }) => [
                     styles.takePhotoButton,
                     pressed && styles.takePhotoButtonPressed,
+                    (isPicking || isUploading) && styles.buttonDisabled,
                   ]}
                   accessibilityRole="button"
                 >
-                  <Feather name="camera" size={18} color={colors.white} />
-                  <Text style={styles.takePhotoButtonText}>Take Photo</Text>
+                  {isPicking ? (
+                    <ActivityIndicator color={colors.white} />
+                  ) : (
+                    <>
+                      <Feather name="camera" size={18} color={colors.white} />
+                      <Text style={styles.takePhotoButtonText}>Take Photo</Text>
+                    </>
+                  )}
                 </Pressable>
 
                 <Pressable
                   onPress={handleChooseGallery}
+                  disabled={isPicking || isUploading}
                   style={({ pressed }) => [
                     styles.galleryButton,
                     pressed && styles.galleryButtonPressed,
+                    (isPicking || isUploading) && styles.buttonDisabled,
                   ]}
                   accessibilityRole="button"
                 >
@@ -277,20 +399,30 @@ export default function JoinExistingCycleScreen() {
                   <Text style={styles.galleryButtonText}>Choose from Gallery</Text>
                 </Pressable>
 
-                {recordImages.length > 0 ? (
-                  <Pressable
-                    onPress={handleUploadRecords}
-                    style={({ pressed }) => [
-                      styles.uploadButton,
-                      pressed && styles.uploadButtonPressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Upload selected photos"
-                  >
-                    <Feather name="upload" size={18} color={colors.white} />
-                    <Text style={styles.uploadButtonText}>Upload</Text>
-                  </Pressable>
-                ) : null}
+                <Pressable
+                  onPress={handleUploadButtonPress}
+                  disabled={isPicking || isUploading}
+                  style={({ pressed }) => [
+                    styles.uploadButton,
+                    pressed && styles.uploadButtonPressed,
+                    (isPicking || isUploading) && styles.buttonDisabled,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Upload selected photos"
+                >
+                  {isUploading ? (
+                    <ActivityIndicator color={colors.white} />
+                  ) : (
+                    <>
+                      <Feather name="upload" size={18} color={colors.white} />
+                      <Text style={styles.uploadButtonText}>
+                        {recordImages.length === 0
+                          ? "Upload"
+                          : `Upload (${recordImages.length})`}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
               </View>
             </View>
           ) : null}
@@ -497,15 +629,22 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   previewItem: {
-    width: 84,
-    height: 84,
+    width: 96,
     borderRadius: 14,
     overflow: "hidden",
     position: "relative",
+    backgroundColor: colors.paleBlue,
   },
   previewImage: {
     width: "100%",
-    height: "100%",
+    height: 84,
+  },
+  previewFileName: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "700",
+    paddingHorizontal: 6,
+    paddingVertical: 4,
   },
   removeImageButton: {
     position: "absolute",
@@ -520,6 +659,9 @@ const styles = StyleSheet.create({
   },
   removeImageButtonPressed: {
     opacity: 0.85,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   uploadIconCircle: {
     width: 56,

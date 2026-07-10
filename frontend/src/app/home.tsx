@@ -25,9 +25,12 @@ import { resolvePondName } from "../services/local-ponds";
 
 
 import {
+
   getSupabasePonds,
   mapSupabasePondName,
 } from "../services/pond";
+
+ 
 
 const colors = {
   primary: "#0A84FF",
@@ -333,6 +336,7 @@ export default function HomeScreen() {
       setFarmerName(profile?.name ?? "Farmer");
     } catch (err) {
       console.log(err);
+
     } finally {
       setIsLoading(false);
     }
@@ -344,9 +348,11 @@ export default function HomeScreen() {
   );
 
   const visiblePonds = useMemo(() => {
-    return ponds.filter((pond) =>
+    return  ponds.filter((pond) =>
       activeTab === "archived" ? pond.archived : !pond.archived,
     );
+
+  
   }, [ponds, activeTab]);
 
   return (

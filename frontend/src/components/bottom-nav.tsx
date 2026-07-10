@@ -19,7 +19,7 @@ const tabs: {
   route?: string;
 }[] = [
   { id: "dashboard", label: "Dashboard", icon: "grid", route: "/home" },
-  { id: "expenses", label: "Expenses", icon: "dollar-sign" },
+  { id: "expenses", label: "Expenses", icon: "dollar-sign", route: "/expenses" },
   { id: "inventory", label: "Inventory", icon: "package", route: "/inventory" },
   { id: "aquagpt", label: "AquaGPT", icon: "cpu", route: "/aqua-gpt" },
 ];
