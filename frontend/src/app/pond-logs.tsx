@@ -19,8 +19,16 @@ import {
   getStatusColor,
   getTemperatureStatus,
 } from "../lib/water-quality";
-import { getLogsForPond, type DailyLogEntry } from "../services/local-daily-logs";
-import { getPondById, type StoredPond } from "../services/local-ponds";
+import {
+  getLogsForPond,
+  type DailyLogEntry,
+} from "../services/dailyLogs";
+
+import {
+  getSupabasePondById,
+  mapSupabasePondName,
+  type SupabasePondRecord,
+} from "../services/pond";
 
 const colors = {
   primary: "#0A84FF",
@@ -112,8 +120,7 @@ function LogHistoryCard({ log }: { log: DailyLogEntry }) {
 export default function PondLogsScreen() {
   const router = useRouter();
   const { pondId } = useLocalSearchParams<{ pondId: string }>();
-
-  const [pond, setPond] = useState<StoredPond | null>(null);
+  const [pond, setPond] = useState<SupabasePondRecord | null>(null);
   const [logs, setLogs] = useState<DailyLogEntry[]>([]);
   const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
@@ -125,7 +132,7 @@ export default function PondLogsScreen() {
 
     setIsLoading(true);
     const [pondData, pondLogs] = await Promise.all([
-      getPondById(pondId),
+      getSupabasePondById(pondId),
       getLogsForPond(pondId),
     ]);
 
@@ -177,7 +184,7 @@ export default function PondLogsScreen() {
             <Text style={styles.pondCardEyebrow}>CURRENT VIEW</Text>
             <View style={styles.pondCardRow}>
               <Text style={styles.pondCardName}>
-                {pond?.pondName ?? "Selected Pond"}
+              {pond ? mapSupabasePondName(pond) : "Selected Pond"}
               </Text>
               <Feather name="sliders" size={18} color={colors.white} />
             </View>

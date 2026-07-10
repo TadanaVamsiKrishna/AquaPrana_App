@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useLocalSearchParams } from "expo-router";
+
 import {
   Alert,
   FlatList,
@@ -28,13 +30,9 @@ import {
   getHarvestWindowDisplay,
   calculateHarvestWindow,
 } from "../lib/harvest-window";
-import {
-  calculateCycleDay,
-  clearPondDraft,
-  formatLastLogTime,
-  getPondDraft,
-  savePond,
-} from "../services/local-ponds";
+
+
+import { createCropCycle } from "../services/cropCycle";
 
 const colors = {
   primary: "#0A84FF",
@@ -83,6 +81,7 @@ const handleDatePickerChange = (
 
 export default function CropDetailsScreen() {
   const router = useRouter();
+  const { pondId } = useLocalSearchParams<{ pondId: string }>();
 
   const [category, setCategory] = useState("");
   const [species, setSpecies] = useState("");
@@ -167,7 +166,14 @@ export default function CropDetailsScreen() {
       return;
     }
 
-    const draft = await getPondDraft();
+    if (!pondId) {
+      Alert.alert(
+        "Pond not found",
+        "Please go back and set up your pond before creating a crop cycle.",
+      );
+      return;
+    }
+ 
     let harvestWindowStart = "";
     let harvestWindowEnd = "";
 
@@ -188,25 +194,15 @@ export default function CropDetailsScreen() {
         harvestWindowEnd = formatDisplayDate(harvestWindow.latest);
       }
     }
-
-    await savePond({
-      id: Date.now().toString(),
-      pondName: draft?.pondName?.trim() || "",
-      area: draft?.area ?? "",
-      depth: draft?.depth ?? "",
+    console.log("Crop Cycle Pond ID:", pondId);
+    await createCropCycle(pondId, {
+      category,
       species,
-      stockingDate: formatDisplayDate(stockingDate),
-      stockingDensity,
-      harvestWindowStart,
-      harvestWindowEnd,
-      cycleDay: String(calculateCycleDay(stockingDate)),
-      biomass: "—",
-      survivalRate: "100%",
-      waterQualityStatus: "Not logged",
-      lastLogTime: "—",
+      stockingDensity: Number(stockingDensity),
+      stockingDate,
+      seedSupplier,
     });
-
-    await clearPondDraft();
+ 
     router.replace("/home" as never);
   };
 

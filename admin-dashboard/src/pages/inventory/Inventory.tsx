@@ -14,12 +14,12 @@ export function Inventory() {
 
   const columns: Column<InventoryItem>[] = [
     {
-      key: 'product',
-      header: 'Product',
+      key: "product",
+      header: "Product",
       render: (row) => (
         <div>
           <div className="cell-primary">{row.product}</div>
-          <div className="cell-secondary">{row.contact}</div>
+          <div className="cell-secondary">{row.locationStatus}</div>
         </div>
       ),
     },
@@ -44,10 +44,10 @@ export function Inventory() {
 
   const onExport = () => {
     downloadCsv('inventory.csv', [
-      ['Product', 'Contact', 'Current Qty', 'Threshold', 'Restock Qty', 'Status'],
+      ['Product', 'Location', 'Current Qty', 'Threshold', 'Restock Qty'],
       ...items.map((i) => [
         i.product,
-        i.contact,
+        i.locationStatus,
         i.currentQty,
         i.threshold,
         i.restockQty,

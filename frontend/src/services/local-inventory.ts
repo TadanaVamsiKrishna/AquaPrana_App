@@ -72,7 +72,7 @@ export const restockInventoryItem = async (id: string) => {
 
     return {
       ...item,
-      currentStock: Number((item.currentStock + item.restockQuantity).toFixed(2)),
+      currentStock: Number((item.current_qty + item.restock_qty).toFixed(2)),
     };
   });
 

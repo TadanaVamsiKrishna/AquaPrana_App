@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,12 +13,15 @@ import {
   View,
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BottomNav } from "../components/bottom-nav";
 import { INVENTORY_UNITS } from "../services/local-inventory";
 
-import { saveInventoryItem } from "../services/inventory";
+import {
+    getInventoryItem,
+    updateInventoryItem,
+  } from "../services/inventory";
 
 const colors = {
   primary: "#0A84FF",
@@ -68,9 +72,9 @@ const isPositiveNumber = (value: string) => {
   );
 };
 
-export default function AddInventoryScreen() {
+export default function EditInventoryScreen() {
   const router = useRouter();
-
+    const { id } = useLocalSearchParams<{ id: string }>();
   const [name, setName] = useState("");
   const [unit, setUnit] = useState<InventoryUnit>("kg");
   const [currentStock, setCurrentStock] = useState("");
@@ -86,6 +90,30 @@ export default function AddInventoryScreen() {
     restockThreshold: false,
     restockQuantity: false,
   });
+
+  useEffect(() => {
+    if (!id) return;
+  
+    async function load() {
+      try {
+        const item = await getInventoryItem(id);
+  
+        if (!item) return;
+  
+        setName(item.product_name);
+        setUnit(item.unit);
+        setCurrentStock(String(item.current_qty));
+        setRestockThreshold(String(item.restock_threshold));
+        setRestockQuantity(String(item.restock_qty));
+        setLocation(item.location ?? "");
+      } catch (error) {
+        console.log("Load Inventory Error:", error);
+        Alert.alert("Error", "Unable to load inventory.");
+      }
+    }
+  
+    load();
+  }, [id]);
 
   const nameError =
     touched.name && !name.trim() ? "Product name is required" : "";
@@ -132,7 +160,7 @@ export default function AddInventoryScreen() {
     });
   };
 
-  const handleSave = async () => {
+  const handleUpdate = async () => {
     if (!isFormValid) {
       markAllTouched();
       return;
@@ -141,22 +169,25 @@ export default function AddInventoryScreen() {
     try {
       setIsSaving(true);
   
-      await saveInventoryItem({
-        name: name.trim(),
+      await updateInventoryItem(id, {
+        product_name: name.trim(),
         unit,
-        currentStock: Number(currentStock),
-        restockThreshold: Number(restockThreshold),
-        restockQuantity: Number(restockQuantity),
+        current_qty: Number(currentStock),
+        restock_threshold: Number(restockThreshold),
+        restock_qty: Number(restockQuantity),
         location: location.trim(),
       });
   
-      router.replace("/inventory");
-    } catch (err) {
-      console.log("Inventory Save Error:", err);
-    } finally {
-      setIsSaving(false);
-    }
-  };
+      Alert.alert("Success", "Inventory updated successfully.");
+
+  router.replace("/inventory" as never);
+      } catch (err) {
+        console.log(err);
+        Alert.alert("Error", "Unable to update inventory.");
+      } finally {
+        setIsSaving(false);
+      }
+    };
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
@@ -168,7 +199,7 @@ export default function AddInventoryScreen() {
         <View style={styles.screen}>
           <View style={styles.topBar}>
             <Pressable
-              onPress={() => router.back()}
+              onPress={() => router.replace("/inventory")}
               style={({ pressed }) => [
                 styles.iconButton,
                 pressed && styles.buttonPressed,
@@ -178,7 +209,9 @@ export default function AddInventoryScreen() {
             >
               <Feather name="arrow-left" size={22} color={colors.text} />
             </Pressable>
-            <Text style={styles.topBarTitle}>Add Product</Text>
+            <Text style={styles.topBarTitle}>
+    Edit Product
+</Text>
             <View style={styles.iconButton} />
           </View>
 
@@ -304,7 +337,7 @@ export default function AddInventoryScreen() {
             </View>
 
             <Pressable
-              onPress={handleSave}
+        onPress={handleUpdate}
               disabled={isSaving}
               style={({ pressed }) => [
                 styles.submitButton,
@@ -313,14 +346,14 @@ export default function AddInventoryScreen() {
               ]}
               accessibilityRole="button"
             >
-              <Feather name="plus" size={18} color={colors.white} />
+             <Feather name="edit-2" size={18} color={colors.white} />
               <Text style={styles.submitButtonText}>
-                {isSaving ? "Saving..." : "Add to Inventory"}
+              {isSaving ? "Updating..." : "Update Inventory"}
               </Text>
             </Pressable>
 
             <Text style={styles.footerNote}>
-              Action will be synced to cloud automatically.
+            Changes will be synced to cloud automatically.
             </Text>
           </ScrollView>
 

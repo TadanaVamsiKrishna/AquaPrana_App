@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as Location from "expo-location";
 import { savePondDraft } from "../services/local-ponds";
+
 import { savePond } from "../services/pond";
 import {
   Alert,
@@ -161,7 +162,7 @@ export default function PondSetupScreen() {
         return;
     }
  
-    const { error } = await savePond(
+    const { data, error } = await savePond(
  
         pondName,
  
@@ -174,6 +175,7 @@ export default function PondSetupScreen() {
         location?.longitude
  
     );
+    console.log("Created Pond ID:", data?.id);
  
     if (error) {
       console.log("Supabase Error:", error);
@@ -194,7 +196,12 @@ export default function PondSetupScreen() {
 
     Alert.alert("Success", "Pond Saved Successfully");
 
-    router.push("/start-journey");
+    router.push({
+      pathname: "/start-journey",
+      params: {
+        pondId: data.id,
+      },
+    });
  
 };
  

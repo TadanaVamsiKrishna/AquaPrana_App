@@ -1,42 +1,4 @@
-// import { supabase } from "../lib/supabase";
 
-// export async function addPond(
-
-//     pond_name:string,
-
-//     area:number,
-
-//     depth:number,
-
-//     culture:string
-
-// ){
-
-// const {
-
-// data:{user}
-
-// }=await supabase.auth.getUser();
-
-// return await supabase
-
-// .from("ponds")
-
-// .insert({
-
-// user_id:user?.id,
-
-// pond_name,
-
-// area,
-
-// depth,
-
-// culture
-
-// });
-
-// }
 
 
 
@@ -77,18 +39,20 @@ export async function savePond(
   }
 
   const { data, error } = await supabase
-    .from("ponds")
-    .insert({
-      user_id: user.id,
-      name: pondName,
-      area_acres: Number(area),
-      depth_ft: Number(averageDepth),
-      latitude,
-      longitude,
-    })
-    .select();
+  .from("ponds")
+  .insert({
+    user_id: user.id,
+    name: pondName,
+    area_acres: Number(area),
+    depth_ft: Number(averageDepth),
+    latitude,
+    longitude,
+  })
+  .select()
+  .single();
 
   console.log("Inserted Data:", data);
+  
   console.log("Insert Error:", error);
 
   return { data, error };
@@ -117,4 +81,16 @@ export async function getSupabasePonds() {
     data: (data ?? []) as SupabasePondRecord[],
     error,
   };
+}
+
+export async function getSupabasePondById(id: string) {
+  const { data, error } = await supabase
+    .from("ponds")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) throw error;
+
+  return data;
 }

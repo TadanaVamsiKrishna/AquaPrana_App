@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Alert,
   Pressable,
   ScrollView,
   StatusBar,
@@ -8,7 +9,7 @@ import {
   View,
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const colors = {
@@ -65,15 +66,27 @@ function RadioButton({ selected }: { selected: boolean }) {
 
 export default function StartJourneyScreen() {
   const router = useRouter();
+  const { pondId } = useLocalSearchParams<{ pondId: string }>();
   const [selectedOption, setSelectedOption] = useState<JourneyOption>("new");
 
   const handleContinue = () => {
-    if (selectedOption === "new") {
-      router.push("/crop-details" as never);
+    if (!pondId) {
+      Alert.alert("Pond not found", "Please set up your pond again.");
       return;
     }
 
-    router.push("/join-existing-cycle" as never);
+    if (selectedOption === "new") {
+      router.push({
+        pathname: "/crop-details",
+        params: { pondId },
+      } as never);
+      return;
+    }
+
+    router.push({
+      pathname: "/join-existing-cycle",
+      params: { pondId },
+    } as never);
   };
 
   return (

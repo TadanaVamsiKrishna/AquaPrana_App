@@ -2,6 +2,11 @@ import { supabase } from "../lib/supabase";
 import type { InventoryItem, InventoryOrder } from "../types/inventory";
 
 export async function getInventoryItems(): Promise<InventoryItem[]> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  console.log("WEB USER:", user);
   const { data, error } = await supabase
     .from("inventory_items")
     .select("*")
@@ -15,19 +20,12 @@ export async function getInventoryItems(): Promise<InventoryItem[]> {
   return (data || []).map(
     (item: any): InventoryItem => ({
       id: item.id,
-
       product: item.product_name,
-
-      contact: "",
-
+      contact: item.location ?? "-",
       currentQty: `${item.current_qty} ${item.unit}`,
-
       threshold: `${item.restock_threshold} ${item.unit}`,
-
       restockQty: `${item.restock_qty} ${item.unit}`,
-
-      locationStatus: item.location ?? "",
-
+      locationStatus: item.location ?? "Warehouse",
       updatedAt: item.updated_at,
     })
   );

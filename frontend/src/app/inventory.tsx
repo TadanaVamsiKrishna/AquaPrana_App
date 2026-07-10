@@ -1,5 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
 import {
+  getInventoryItems,
+  restockInventoryItem,
+} from "../services/inventory";
+import {
   ActivityIndicator,
   Alert,
   Pressable,
@@ -13,16 +17,16 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BottomNav } from "../components/bottom-nav";
-import {
-  formatStockAmount,
-  getInventoryItems,
-  getLowStockItems,
-  getTotalStockQuantity,
-  isLowStock,
-  restockInventoryItem,
-  type StoredInventoryItem,
-} from "../services/local-inventory";
 
+interface InventoryItem {
+  id: string;
+  product_name: string;
+  unit: string;
+  current_qty: number;
+  restock_threshold: number;
+  restock_qty: number;
+  location: string | null;
+}
 const colors = {
   primary: "#0A84FF",
   primaryDark: "#004A9F",
@@ -40,21 +44,7 @@ const colors = {
   shadow: "#0A4F9E",
 };
 
-function getCategoryIcon(
-  category: StoredInventoryItem["category"],
-): keyof typeof Feather.glyphMap {
-  if (category === "Feed") {
-    return "box";
-  }
-
-  if (category === "Treatment") {
-    return "thermometer";
-  }
-
-  if (category === "Minerals") {
-    return "layers";
-  }
-
+function getCategoryIcon(): keyof typeof Feather.glyphMap {
   return "package";
 }
 
@@ -66,18 +56,17 @@ function UrgentItemRow({
   item,
   onRestock,
 }: {
-  item: StoredInventoryItem;
+  item: InventoryItem;
   onRestock: (id: string) => void;
 }) {
   return (
     <View style={styles.urgentRow}>
       <View style={styles.urgentAccent} />
       <View style={styles.urgentCopy}>
-        <Text style={styles.urgentName}>{item.name}</Text>
+        <Text style={styles.urgentName}>{item.product_name}</Text>
         <Text style={styles.urgentMeta}>
-          {formatStockAmount(item.currentStock, item.unit)} /{" "}
-          {formatStockAmount(item.restockThreshold, item.unit)}
-        </Text>
+  {item.current_qty} {item.unit} / {item.restock_threshold} {item.unit}
+</Text>
       </View>
       <Pressable
         onPress={() => onRestock(item.id)}
@@ -96,26 +85,31 @@ function UrgentItemRow({
 function InventoryCard({
   item,
   onRestock,
+  onEdit,
 }: {
-  item: StoredInventoryItem;
+  item: InventoryItem;
   onRestock: (id: string) => void;
+  onEdit: (id: string) => void;
 }) {
-  const low = isLowStock(item);
+  const low =
+  item.current_qty <= item.restock_threshold;
 
   return (
     <View style={styles.inventoryCard}>
       <View style={styles.inventoryCardHeader}>
         <View style={styles.inventoryIdentity}>
           <View style={styles.categoryIcon}>
-            <Feather
-              name={getCategoryIcon(item.category)}
-              size={16}
-              color={colors.primary}
-            />
+          <Feather
+          name="package"
+          size={16}
+          color={colors.primary}
+        />
           </View>
           <View style={styles.inventoryIdentityCopy}>
-            <Text style={styles.categoryLabel}>{item.category}</Text>
-            <Text style={styles.productName}>{item.name}</Text>
+                <Text style={styles.categoryLabel}>
+        Inventory Item
+      </Text>
+            <Text style={styles.productName}>{item.product_name}</Text>
           </View>
         </View>
 
@@ -137,7 +131,7 @@ function InventoryCard({
       </View>
 
       <Text style={styles.quantityValue}>
-        {formatStockAmount(item.currentStock, item.unit)}
+        {item.current_qty} {item.unit}
       </Text>
 
       {item.location ? (
@@ -156,32 +150,36 @@ function InventoryCard({
           <Text style={styles.restockButtonText}>Restock</Text>
         </Pressable>
 
-        <Pressable
-          onPress={() =>
-            Alert.alert("Edit", "Editing products will be available soon.")
-          }
-          style={({ pressed }) => [
-            styles.editButton,
-            pressed && styles.buttonPressed,
-          ]}
-          accessibilityRole="button"
-        >
-          <Text style={styles.editButtonText}>Edit</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
+              <Pressable
+        onPress={() => onEdit(item.id)}
+        style={({ pressed }) => [
+          styles.editButton,
+          pressed && styles.buttonPressed,
+        ]}
+      >
+        <Text style={styles.editButtonText}>Edit</Text>
+      </Pressable>
+            </View>
+          </View>
+        );
+      }
 
 export default function InventoryScreen() {
   const router = useRouter();
-  const [items, setItems] = useState<StoredInventoryItem[]>([]);
+  const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  const handleEdit = (id: string) => {
+    router.push({
+      pathname: "/edit-inventory",
+      params: { id },
+    });
+  };
 
   const loadItems = useCallback(async () => {
     setIsLoading(true);
     const saved = await getInventoryItems();
-    setItems(saved);
+  setItems(saved ?? []);
     setIsLoading(false);
   }, []);
 
@@ -191,14 +189,29 @@ export default function InventoryScreen() {
     }, [loadItems]),
   );
 
-  const lowStockItems = useMemo(() => getLowStockItems(items), [items]);
-  const totalItems = useMemo(() => getTotalStockQuantity(items), [items]);
+  const lowStockItems = useMemo(
+    () =>
+      items.filter(
+        (item) => item.current_qty <= item.restock_threshold
+      ),
+    [items]
+  );
+  
+  const totalItems = useMemo(
+    () => items.length,
+    [items]
+  );
 
   const handleRestock = async (id: string) => {
-    const nextItems = await restockInventoryItem(id);
-    setItems(nextItems);
+    try {
+      await restockInventoryItem(id);
+      await loadItems();
+      Alert.alert("Success", "Inventory restocked.");
+    } catch (error) {
+      Alert.alert("Error", "Unable to restock item.");
+      console.log(error);
+    }
   };
-
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
@@ -320,10 +333,11 @@ export default function InventoryScreen() {
                 ) : (
                   items.map((item) => (
                     <InventoryCard
-                      key={item.id}
-                      item={item}
-                      onRestock={handleRestock}
-                    />
+                    key={item.id}
+                    item={item}
+                    onRestock={handleRestock}
+                    onEdit={handleEdit}
+                  />
                   ))
                 )}
               </View>

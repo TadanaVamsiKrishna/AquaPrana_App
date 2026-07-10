@@ -17,7 +17,8 @@ type PondNameSource = {
 };
 
 export type StoredPond = {
-  id: string;
+  id: string;              // Local AsyncStorage ID
+    // Supabase UUID
   pondName: string;
   name?: string;
   area: string;

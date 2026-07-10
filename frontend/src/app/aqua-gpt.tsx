@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { askAquaGPT } from "../services/aquagpt";
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -16,7 +17,8 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getFarmerProfile } from "../services/local-profile";
-import { getPonds, type StoredPond } from "../services/local-ponds";
+import type { StoredPond } from "../services/local-ponds";
+import { getSupabasePonds } from "../services/pond";
 
 const colors = {
   primary: "#0A84FF",
@@ -59,41 +61,7 @@ function buildWelcomeMessage(farmerName: string): ChatMessage {
   };
 }
 
-function buildAssistantReply(question: string, pond: StoredPond | null): string {
-  const pondName = pond?.pondName ?? "your pond";
-  const lower = question.toLowerCase();
 
-  if (lower.includes("ammonia")) {
-    return `For ${pondName}, elevated ammonia is often driven by excess feed, weak aeration, or rising biomass load.\n\nTry this next:\n1. Reduce feed by about 20%\n2. Increase aeration overnight\n3. Check sludge and water exchange\n\nI can also compare this to your last log if you ask.`;
-  }
-
-  if (lower.includes("harvest")) {
-    const window =
-      pond?.harvestWindowStart && pond?.harvestWindowEnd
-        ? `${pond.harvestWindowStart} – ${pond.harvestWindowEnd}`
-        : "your planned harvest window";
-
-    return `${pondName} is on day ${pond?.cycleDay ?? "—"}. Harvest readiness depends on size, survival (${pond?.survivalRate ?? "—"}), and market timing.\n\nSuggested harvest window: ${window}.\nWant a biomass and FCR check before deciding?`;
-  }
-
-  if (lower.includes("fcr")) {
-    return `FCR for ${pondName} looks sensitive to recent feed changes. Keep daily feed logs tight for the next 5 days so I can plot a clearer trend.\n\nBiomass right now: ${pond?.biomass ?? "—"}.`;
-  }
-
-  if (lower.includes("survival")) {
-    return `Current survival for ${pondName} is ${pond?.survivalRate ?? "—"}. Watch mortality logs and water quality together — stress events usually show up in both.`;
-  }
-
-  if (lower.includes("water") || lower.includes("quality")) {
-    return `Water quality for ${pondName} is currently ${pond?.waterQualityStatus ?? "Not logged"}. Prioritize DO, pH, and ammonia in your next pond check.`;
-  }
-
-  if (lower.includes("feed") || lower.includes("reduc")) {
-    return `If conditions are unstable on ${pondName}, trim feed about 15–20% for 1–2 days while aeration stays high. Then ramp back once ammonia improves.`;
-  }
-
-  return `Got it. For ${pondName}, I can help with ammonia risk, harvest timing, FCR, survival, or water quality.\n\nAsk one of the suggested questions below, or type a custom pond question.`;
-}
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
@@ -140,15 +108,39 @@ export default function AquaGptScreen() {
   );
 
   const loadPonds = useCallback(async () => {
-    const saved = await getPonds();
-    setPonds(saved);
-
+    const { data, error } = await getSupabasePonds();
+  
+    if (error) {
+      console.error(error);
+      return;
+    }
+  
+    const ponds = data.map((pond) => ({
+      id: pond.id,                  // UUID from Supabase
+      pondName: pond.name,
+      name: pond.name,
+      area: String(pond.area_acres ?? ""),
+      depth: String(pond.depth_ft ?? ""),
+      species: "",
+      stockingDate: "",
+      stockingDensity: "",
+      harvestWindowStart: "",
+      harvestWindowEnd: "",
+      cycleDay: "",
+      biomass: "",
+      survivalRate: "",
+      waterQualityStatus: "",
+      lastLogTime: "",
+    }));
+  
+    setPonds(ponds);
+  
     setSelectedPondId((current) => {
-      if (current && saved.some((pond) => pond.id === current)) {
+      if (current && ponds.some((p) => p.id === current)) {
         return current;
       }
-
-      return saved[0]?.id ?? null;
+  
+      return ponds[0]?.id ?? null;
     });
   }, []);
 
@@ -190,28 +182,42 @@ export default function AquaGptScreen() {
     return () => clearTimeout(timer);
   }, [messages]);
 
-  const sendQuestion = (question: string) => {
+  const sendQuestion = async (question: string) => {
     const trimmed = question.trim();
-
-    if (!trimmed) {
-      return;
-    }
-
-    const userMessage: ChatMessage = {
+  
+    if (!trimmed) return;
+  
+    const userMessage = {
       id: `user-${Date.now()}`,
-      role: "user",
+      role: "user" as const,
       text: trimmed,
     };
-
-    const assistantMessage: ChatMessage = {
-      id: `assistant-${Date.now() + 1}`,
-      role: "assistant",
-      pondName: selectedPond?.pondName,
-      text: buildAssistantReply(trimmed, selectedPond),
-    };
-
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+  
+    setMessages((current) => [...current, userMessage]);
     setDraft("");
+  
+    try {
+      const reply = await askAquaGPT(
+        trimmed,
+        selectedPond!.id
+    );
+  
+      const assistantMessage = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant" as const,
+        text: reply,
+      };
+  
+      setMessages((current) => [...current, assistantMessage]);
+    } catch (error) {
+      const assistantMessage = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant" as const,
+        text: "Sorry, I couldn't get a response from AquaGPT.",
+      };
+  
+      setMessages((current) => [...current, assistantMessage]);
+    }
   };
 
   const headerTitle = selectedPond?.pondName ?? "Select Pond";

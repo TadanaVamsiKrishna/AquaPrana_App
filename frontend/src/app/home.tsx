@@ -18,11 +18,16 @@ import {
   type OverallWaterQuality,
 } from "../lib/water-quality";
 import { getFarmerProfile, getGreeting } from "../services/local-profile";
+
+
+import type { StoredPond } from "../services/local-ponds";
+import { resolvePondName } from "../services/local-ponds";
+
+
 import {
-  getPonds,
-  resolvePondName,
-  type StoredPond,
-} from "../services/local-ponds";
+  getSupabasePonds,
+  mapSupabasePondName,
+} from "../services/pond";
 
 const colors = {
   primary: "#0A84FF",
@@ -288,15 +293,50 @@ export default function HomeScreen() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
-    const [savedPonds, profile] = await Promise.all([
-      getPonds(),
-      getFarmerProfile(),
-    ]);
-    setPonds(savedPonds);
-    setFarmerName(profile?.name ?? "Farmer");
-    setIsLoading(false);
+  
+    try {
+      const [{ data: ponds }, profile] = await Promise.all([
+        getSupabasePonds(),
+        getFarmerProfile(),
+      ]);
+  
+      const savedPonds: StoredPond[] =
+        (ponds ?? []).map((pond) => ({
+          id: pond.id,
+          pondName: mapSupabasePondName(pond),
+  
+          area: String(pond.area_acres ?? ""),
+          depth: String(pond.depth_ft ?? ""),
+  
+          species: "",
+          stockingDate: "",
+          stockingDensity: "",
+  
+          harvestWindowStart: "",
+          harvestWindowEnd: "",
+  
+          cycleDay: "1",
+  
+          biomass: "",
+  
+          survivalRate: "",
+  
+          waterQualityStatus: "Not logged",
+  
+          lastLogTime: "",
+  
+          archived: false,
+        })) ?? [];
+  
+      setPonds(savedPonds);
+  
+      setFarmerName(profile?.name ?? "Farmer");
+    } catch (err) {
+      console.log(err);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
-
   useFocusEffect(
     useCallback(() => {
       loadData();

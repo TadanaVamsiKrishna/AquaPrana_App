@@ -19,8 +19,13 @@ import {
   WATER_PARAMETERS,
   type WaterParameterKey,
 } from "../lib/water-quality";
-import { saveDailyLog, type DailyLogEntry } from "../services/local-daily-logs";
-import { getPondById, type StoredPond } from "../services/local-ponds";
+import { saveDailyLog } from "../services/dailyLogs";
+import {
+  getSupabasePondById,
+  mapSupabasePondName,
+} from "../services/pond";
+
+import type { StoredPond } from "../services/local-ponds";
 
 const colors = {
   primary: "#0A84FF",
@@ -281,20 +286,45 @@ export default function DailyLogEntryScreen() {
       return;
     }
 
-    const pondData = await getPondById(pondId);
-    setPond(pondData);
-    setForm(emptyForm);
-    setTouchedWater({
-      dissolvedOxygen: false,
-      ph: false,
-      temperature: false,
-      salinity: false,
-      ammonia: false,
-      calcium: false,
-      magnesium: false,
-      potassium: false,
-    });
-    setObservationTime(getObservationTime());
+    try {
+      const pondData = await getSupabasePondById(pondId);
+    
+      setPond({
+        id: pondData.id,
+        pondName: mapSupabasePondName(pondData),
+        area: String(pondData.area_acres ?? ""),
+        depth: String(pondData.depth_ft ?? ""),
+        species: "",
+        stockingDate: "",
+        stockingDensity: "",
+        harvestWindowStart: "",
+        harvestWindowEnd: "",
+        cycleDay: "1",
+        biomass: "",
+        survivalRate: "",
+        waterQualityStatus: "Not logged",
+        lastLogTime: "",
+      });
+    
+      setForm(emptyForm);
+    
+      setTouchedWater({
+        dissolvedOxygen: false,
+        ph: false,
+        temperature: false,
+        salinity: false,
+        ammonia: false,
+        calcium: false,
+        magnesium: false,
+        potassium: false,
+      });
+    
+      setObservationTime(getObservationTime());
+    
+    } catch (err) {
+      console.log(err);
+      Alert.alert("Error", "Unable to load pond.");
+    }
   }, [pondId]);
 
   useFocusEffect(
@@ -323,40 +353,62 @@ export default function DailyLogEntryScreen() {
   };
 
   const handleSave = async () => {
-    if (!pondId || !pond) {
-      Alert.alert("Pond not found", "Please go back and select a pond again.");
+    if (!pondId) {
+      Alert.alert("Pond not found");
       return;
     }
-
+  
     setIsSaving(true);
+  
+    try {
+      const now = new Date();
+  
+      const [hours, minutes] = observationTime.split(":");
+  
+      now.setHours(Number(hours), Number(minutes), 0, 0);
+  
+      await saveDailyLog({
+        pondId,
+  
+        observedAt: now.toISOString(),
+  
+        dissolvedOxygen: form.dissolvedOxygen,
+        ph: form.ph,
+        temperature: form.temperature,
+        salinity: form.salinity,
+        ammonia: form.ammonia,
+  
+        calcium: form.calcium,
+        magnesium: form.magnesium,
+        potassium: form.potassium,
+  
+        feedQty: form.feedQty,
+        feedBrand: form.feedBrand,
+  
+        mortalityCount: form.mortalityCount,
+  
+        abwSample: form.abwSample,
+  
+        treatment: form.treatment,
+  
+        notes: form.notes,
+      });
+  
+      Alert.alert("Success", "Daily log saved successfully.");
+  
+      router.replace("/home" as never);
+    } catch (e) {
+      console.log(e);
 
-    const now = new Date();
-    const [hours, minutes] = observationTime.split(":");
-    now.setHours(Number(hours) || 0, Number(minutes) || 0, 0, 0);
+      const message =
+        e instanceof Error && e.message
+          ? e.message
+          : "Unable to save daily log.";
 
-    const entry: DailyLogEntry = {
-      id: Date.now().toString(),
-      pondId,
-      observedAt: now.toISOString(),
-      dissolvedOxygen: form.dissolvedOxygen || "0",
-      ph: form.ph || "0",
-      temperature: form.temperature || "0",
-      salinity: form.salinity || "0",
-      ammonia: form.ammonia || "0",
-      calcium: form.calcium || "0",
-      magnesium: form.magnesium || "0",
-      potassium: form.potassium || "0",
-      feedQty: form.feedQty || "0",
-      feedBrand: form.feedBrand,
-      mortalityCount: form.mortalityCount || "0",
-      abwSample: form.abwSample || "0",
-      treatment: form.treatment,
-      notes: form.notes,
-    };
-
-    await saveDailyLog(entry);
-    setIsSaving(false);
-    router.replace("/home" as never);
+      Alert.alert("Error", message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
