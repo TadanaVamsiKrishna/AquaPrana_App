@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -12,36 +13,49 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PondBottomNav } from "../components/pond-bottom-nav";
-import { getSpeciesDuration } from "../lib/harvest-window";
 import { navigateToDailyLogEntry } from "../lib/daily-log-navigation";
-import { resolvePondId } from "../lib/pond-route";
+import { navigateBackToHome, resolvePondId } from "../lib/pond-route";
+import {
+  getAbwDisplayValue,
+  getFcrColor,
+  getSurvivalColorFromRate,
+  isAbwStale,
+  isMortalityElevated,
+} from "../lib/cycle-metrics";
 import {
   getParameterStatus,
   getStatusBackground,
   getStatusColor,
-  getSurvivalColor,
   type ParameterStatus,
   type WaterParameterKey,
 } from "../lib/water-quality";
 import {
-  getLatestLogForPond,
-  getPondLogTotals,
-  getTodayLogCountForPond,
-  pondHasLogsForActiveCycle,
-} from "../services/local-daily-logs";
-import { getFeedScheduleForPond } from "../services/local-feed-schedule";
-import { getFarmerProfile } from "../services/local-profile";
-import { getExpensesForPond } from "../services/local-pond-expenses";
+  fetchDashboardData,
+  formatObservedAt,
+  formatSpeciesLine,
+  getCycleDay,
+  getHarvestProgress,
+  getHarvestWindowLabel,
+  type CropCycleRecord,
+  type DashboardPondLog,
+} from "../services/dashboardService";
 import {
-  getPondExpenseSummary,
-  resolveCycleId,
-} from "../services/pond-expenses";
+  fetchFeedScheduleViewForCycle,
+  formatFeedTimeDisplay,
+  type FeedingScheduleView,
+} from "../services/feedingScheduleService";
+import { getFarmerProfile } from "../services/local-profile";
+import {
+  formatExpenseUpdatedAt,
+  getCycleExpensesByCycleId,
+  type CycleExpenseRecord,
+} from "../services/cycleExpensesService";
+import { getPriceConfigByCycleId } from "../services/priceConfigService";
 import {
   getDataSourceForPond,
   saveDataSourceForPond,
   type PondDataSource,
 } from "../services/local-pond-preferences";
-import { getPondById, formatLastLogTime, type StoredPond } from "../services/local-ponds";
 
 const colors = {
   primary: "#0A84FF",
@@ -62,7 +76,14 @@ const DASHBOARD_VITALS: {
   key: WaterParameterKey;
   label: string;
   unit: string;
-  readingKey: keyof NonNullable<StoredPond["latestReadings"]>;
+  readingKey: keyof Pick<
+    DashboardPondLog,
+    | "dissolvedOxygen"
+    | "ph"
+    | "ammonia"
+    | "temperature"
+    | "salinity"
+  >;
   range: string;
 }[] = [
   { key: "do", label: "DO", unit: "mg/L", readingKey: "dissolvedOxygen", range: "4.0 - 10.0" },
@@ -72,32 +93,28 @@ const DASHBOARD_VITALS: {
   { key: "salinity", label: "Salinity", unit: "PPT", readingKey: "salinity", range: "10 - 25 ppt" },
 ];
 
-function formatHarvestWindow(pond: StoredPond) {
-  const duration = getSpeciesDuration(pond.species);
-  const cycleDay = Number(pond.cycleDay);
-
-  if (duration && Number.isFinite(cycleDay)) {
-    return `Day ${duration.minDays} - ${duration.maxDays}`;
+function formatMetricValue(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "—";
   }
 
-  if (pond.harvestWindowStart && pond.harvestWindowEnd) {
-    const start = pond.harvestWindowStart.replace(/\s+\d{4}$/, "");
-    const end = pond.harvestWindowEnd.replace(/^\d+\s+\w+\s+/, "").replace(/\s+\d{4}$/, "");
-    return `${start} - ${end}`;
-  }
-
-  return "Not set";
+  return String(value);
 }
 
-function getHarvestProgress(pond: StoredPond) {
-  const cycleDay = Number(pond.cycleDay);
-  const duration = getSpeciesDuration(pond.species);
-
-  if (!duration || !Number.isFinite(cycleDay)) {
-    return 0.35;
+function formatBiomassValue(cycle: CropCycleRecord | null) {
+  if (cycle?.current_biomass_kg == null) {
+    return "—";
   }
 
-  return Math.min(Math.max(cycleDay / duration.maxDays, 0.08), 1);
+  return `${cycle.current_biomass_kg.toLocaleString("en-US")} kg`;
+}
+
+function formatFcr(cycle: CropCycleRecord | null) {
+  if (cycle?.estimated_fcr == null) {
+    return "—";
+  }
+
+  return String(cycle.estimated_fcr);
 }
 
 function getUserInitial(name: string) {
@@ -178,130 +195,97 @@ export default function DailyLogScreen() {
   const { pondId: pondIdParam } = useLocalSearchParams<{ pondId: string }>();
   const pondId = resolvePondId(pondIdParam);
 
-  const [pond, setPond] = useState<StoredPond | null>(null);
+  const [pondName, setPondName] = useState("Pond");
+  const [cropCycle, setCropCycle] = useState<CropCycleRecord | null>(null);
+  const [latestLog, setLatestLog] = useState<DashboardPondLog | null>(null);
   const [farmerName, setFarmerName] = useState("Farmer");
   const [dataSource, setDataSource] = useState<PondDataSource | null>(null);
   const [hasLogs, setHasLogs] = useState(false);
   const [hasFeedSetup, setHasFeedSetup] = useState(false);
-  const [hasExpenseSetup, setHasExpenseSetup] = useState(false);
   const [todayLogCount, setTodayLogCount] = useState(0);
-  const [latestAbw, setLatestAbw] = useState("—");
-  const [cumulativeFeed, setCumulativeFeed] = useState(0);
-  const [mortalityTotal, setMortalityTotal] = useState(0);
-  const [expenseTotal, setExpenseTotal] = useState(0);
-  const [expenseBreakdown, setExpenseBreakdown] = useState({
-    feed: 0,
-    seed: 0,
-    treatment: 0,
-    labour: 0,
-  });
-  const [feedSchedule, setFeedSchedule] = useState({
-    feedsPerDay: 4,
-    perFeedQty: "12.0",
-    dailyQty: "48.0",
-    feedingTimes: "06:00, 11:00, 14:00, 17:00",
-    nextFeedTime: "10:00 AM",
-    nextFeedQty: "11.0",
-    lastUpdated: "",
-  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [cycleExpenses, setCycleExpenses] = useState<CycleExpenseRecord | null>(
+    null,
+  );
+  const [hasPriceConfig, setHasPriceConfig] = useState(false);
+  const [feedSchedule, setFeedSchedule] = useState<FeedingScheduleView | null>(
+    null,
+  );
+  const [feedScheduleError, setFeedScheduleError] = useState<string | null>(
+    null,
+  );
+  const [latestAbwObservedAt, setLatestAbwObservedAt] = useState<string | null>(
+    null,
+  );
+  const [todayMortality, setTodayMortality] = useState(0);
 
   const loadPond = useCallback(async () => {
     if (!pondId) {
       return;
     }
 
-    const [
-      pondData,
-      profile,
-      latestLog,
-      logsExist,
-      source,
-      schedule,
-      todayCount,
-      totals,
-    ] = await Promise.all([
-      getPondById(pondId),
-      getFarmerProfile(),
-      getLatestLogForPond(pondId),
-      pondHasLogsForActiveCycle(pondId),
-      getDataSourceForPond(pondId),
-      getFeedScheduleForPond(pondId),
-      getTodayLogCountForPond(pondId),
-      getPondLogTotals(pondId),
-    ]);
+    setIsLoading(true);
+    setLoadError(null);
 
-    const expenseResult = await getPondExpenseSummary(
-      pondId,
-      resolveCycleId(pondData?.stockingDate),
-    );
-    const expenses = expenseResult.summary ?? (await getExpensesForPond(pondId));
+    try {
+      const [dashboardData, profile, source] = await Promise.all([
+        fetchDashboardData(pondId),
+        getFarmerProfile(),
+        getDataSourceForPond(pondId),
+      ]);
 
-    const hasLogData =
-      logsExist ||
-      !!latestLog ||
-      !!pondData?.latestReadings?.dissolvedOxygen ||
-      !!pondData?.latestReadings?.ph;
+      const cycleId = dashboardData.cropCycle?.id;
+      let resolvedFeedSchedule: FeedingScheduleView | null = null;
 
-    setPond(pondData);
-    setFarmerName(profile?.name ?? "Farmer");
-    setDataSource(source);
-    setHasLogs(hasLogData);
-    setHasFeedSetup(!!schedule);
-    setHasExpenseSetup(
-      !!expenses &&
-        (!!expenses.configured ||
-          !!expenses.priceConfig ||
-          (expenses.total ?? 0) > 0),
-    );
-    setTodayLogCount(todayCount);
-    setLatestAbw(latestLog?.abwSample ? `${latestLog.abwSample} g` : "—");
-    setCumulativeFeed(totals.cumulativeFeed);
-    setMortalityTotal(totals.mortality);
+      if (cycleId) {
+        try {
+          resolvedFeedSchedule = await fetchFeedScheduleViewForCycle(
+            cycleId,
+            dashboardData.cropCycle?.current_biomass_kg ?? null,
+          );
+          setFeedScheduleError(null);
+        } catch (error) {
+          console.log("[daily-log] feed schedule fetch error:", error);
+          setFeedScheduleError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load feeding schedule.",
+          );
+        }
+      } else {
+        setFeedScheduleError(null);
+      }
 
-    if (expenses) {
-      setExpenseTotal(expenses.total);
-      setExpenseBreakdown({
-        feed: expenses.feed,
-        seed: expenses.seed,
-        treatment: expenses.treatment,
-        labour: expenses.labour + (expenses.others ?? 0),
-      });
-    } else {
-      setExpenseTotal(0);
-      setExpenseBreakdown({ feed: 0, seed: 0, treatment: 0, labour: 0 });
-    }
+      const [priceConfig, expenses] = cycleId
+        ? await Promise.all([
+            getPriceConfigByCycleId(cycleId),
+            getCycleExpensesByCycleId(cycleId),
+          ])
+        : [null, null];
 
-    if (schedule) {
-      const perFeed = Number(schedule.initialQuantity) || 12;
-      const daily = perFeed * schedule.feedsPerDay;
-      const nextTime =
-        schedule.feedingTimes[1] ?? schedule.feedingTimes[0] ?? "10:00";
-      const lastUpdated = schedule.updatedAt
-        ? formatLastLogTime(new Date(schedule.updatedAt))
-        : "Recently";
-
-      setFeedSchedule({
-        feedsPerDay: schedule.feedsPerDay,
-        perFeedQty: perFeed.toFixed(1),
-        dailyQty: daily.toFixed(1),
-        feedingTimes: schedule.feedingTimes.join(", "),
-        nextFeedTime:
-          nextTime.includes("AM") || nextTime.includes("PM")
-            ? nextTime
-            : `${nextTime}`,
-        nextFeedQty: perFeed.toFixed(1),
-        lastUpdated,
-      });
-    } else {
-      setFeedSchedule({
-        feedsPerDay: 4,
-        perFeedQty: "12.0",
-        dailyQty: "48.0",
-        feedingTimes: "06:00, 11:00, 14:00, 17:00",
-        nextFeedTime: "10:00 AM",
-        nextFeedQty: "11.0",
-        lastUpdated: "",
-      });
+      setPondName(dashboardData.pondName);
+      setCropCycle(dashboardData.cropCycle);
+      setLatestLog(dashboardData.latestLog);
+      setFarmerName(profile?.name ?? "Farmer");
+      setDataSource(source);
+      setHasLogs(!!dashboardData.latestLog);
+      setFeedSchedule(resolvedFeedSchedule);
+      setHasFeedSetup(!!resolvedFeedSchedule);
+      setHasPriceConfig(!!priceConfig);
+      setCycleExpenses(expenses);
+      setTodayLogCount(dashboardData.todayLogCount);
+      setLatestAbwObservedAt(dashboardData.latestAbwObservedAt);
+      setTodayMortality(dashboardData.todayMortality);
+    } catch (error) {
+      console.log("[daily-log] dashboard load error:", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load dashboard data.",
+      );
+    } finally {
+      setIsLoading(false);
     }
   }, [pondId]);
 
@@ -355,34 +339,59 @@ export default function DailyLogScreen() {
   };
 
   const vitalCards = useMemo(() => {
-    const readings = pond?.latestReadings;
     const hasReadingValues =
-      readings &&
-      Object.values(readings).some(
-        (value) => value && value !== "0" && value !== "—",
-      );
+      !!latestLog &&
+      DASHBOARD_VITALS.some((vital) => latestLog[vital.readingKey] !== null);
 
     return DASHBOARD_VITALS.map((vital) => {
-      const rawValue = readings?.[vital.readingKey] ?? "";
-      const numericValue =
-        rawValue && rawValue !== "0" ? Number(rawValue) : null;
+      const numericValue = latestLog?.[vital.readingKey] ?? null;
       const status = hasReadingValues
-        ? getParameterStatus(
-            vital.key,
-            Number.isFinite(numericValue) ? numericValue : null,
-          )
+        ? getParameterStatus(vital.key, numericValue)
         : ("none" as ParameterStatus);
 
       return {
         ...vital,
-        value: rawValue && rawValue !== "0" ? rawValue : "—",
+        value: formatMetricValue(numericValue),
         status,
       };
     });
-  }, [pond]);
+  }, [latestLog]);
 
-  const survivalRate = pond?.survivalRate ?? "—";
-  const survivalColor = getSurvivalColor(survivalRate);
+  const cycleDay = getCycleDay(cropCycle);
+  const survivalRateValue = cropCycle?.survival_rate ?? null;
+  const survivalRate =
+    survivalRateValue != null ? `${survivalRateValue}%` : "—";
+  const survivalColor = getSurvivalColorFromRate(survivalRateValue);
+  const abwStale = isAbwStale(latestAbwObservedAt);
+  const latestAbw = getAbwDisplayValue(
+    cropCycle?.current_abw_g,
+    latestAbwObservedAt,
+  );
+  const biomassValue = formatBiomassValue(cropCycle);
+  const biomassColor = abwStale ? colors.muted : colors.text;
+  const fcrValue = formatFcr(cropCycle);
+  const fcrColor = getFcrColor(cropCycle?.estimated_fcr);
+  const latestFeedQty =
+    cropCycle?.current_feed_per_day_kg != null
+      ? `${cropCycle.current_feed_per_day_kg} kg`
+      : latestLog?.feedQty != null
+        ? `${latestLog.feedQty} kg`
+        : "—";
+  const latestFeedBrand = latestLog?.feedBrand ?? "—";
+  const latestMortality = cropCycle ? String(todayMortality) : "—";
+  const mortalityColor = isMortalityElevated(
+    todayMortality,
+    cropCycle?.stocking_density ?? 0,
+  )
+    ? colors.danger
+    : colors.muted;
+  const latestTreatment = latestLog?.treatment ?? "—";
+  const lastUpdatedLabel = formatObservedAt(
+    cropCycle?.last_water_test_date ?? latestLog?.observedAt,
+  );
+  const abwUpdatedLabel = latestAbwObservedAt
+    ? formatObservedAt(latestAbwObservedAt)
+    : "No ABW log";
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -391,7 +400,7 @@ export default function DailyLogScreen() {
       <View style={styles.screen}>
         <View style={styles.header}>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() => navigateBackToHome(router)}
             style={styles.iconButton}
             accessibilityRole="button"
           >
@@ -407,49 +416,67 @@ export default function DailyLogScreen() {
             <Text style={styles.profileName}>Hi, {farmerName}</Text>
           </View>
 
-          <Pressable style={styles.iconButton} accessibilityRole="button">
-            <Feather name="bell" size={20} color={colors.text} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable style={styles.iconButton} accessibilityRole="button">
+              <Feather name="bell" size={20} color={colors.text} />
+            </Pressable>
+          </View>
         </View>
 
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+          {isLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+          ) : null}
+
+          {loadError ? (
+            <View style={styles.infoCard}>
+              <Text style={styles.emptyInfoTitle}>Unable to load dashboard</Text>
+              <Text style={styles.emptyInfoBody}>{loadError}</Text>
+            </View>
+          ) : null}
+
           <View style={styles.pondHeroCard}>
             <View style={styles.pondHeroTop}>
               <View>
-                <Text style={styles.pondHeroName}>
-                  {pond?.pondName ?? "Pond"}
-                </Text>
+                <Text style={styles.pondHeroName}>{pondName}</Text>
                 <View style={styles.activeRow}>
                   <View style={styles.activeDot} />
-                  <Text style={styles.activeText}>ACTIVE</Text>
+                  <Text style={styles.activeText}>
+                    {cropCycle?.status?.toUpperCase() ?? "ACTIVE"}
+                  </Text>
                 </View>
               </View>
               <View style={styles.cycleDayBlock}>
                 <Text style={styles.cycleDayLabel}>Cycle Day</Text>
                 <Text style={styles.cycleDayValue}>
-                  Day {pond?.cycleDay ?? "—"}
+                  {cycleDay != null ? `Day ${cycleDay}` : "Day —"}
                 </Text>
               </View>
             </View>
 
             <View style={styles.pondHeroBottom}>
               <Text style={styles.speciesText}>
-                Species: {pond?.species ?? "—"}
+                Species: {formatSpeciesLine(cropCycle)}
               </Text>
+              {!cropCycle ? (
+                <Text style={styles.harvestValue}>No Active Crop Cycle</Text>
+              ) : null}
               <View style={styles.harvestBlock}>
                 <Text style={styles.harvestLabel}>Harvest Window</Text>
                 <Text style={styles.harvestValue}>
-                  {pond ? formatHarvestWindow(pond) : "—"}
+                  {getHarvestWindowLabel(cropCycle)}
                 </Text>
                 <View style={styles.progressTrack}>
                   <View
                     style={[
                       styles.progressFill,
                       {
-                        width: `${(pond ? getHarvestProgress(pond) : 0.3) * 100}%`,
+                        width: `${getHarvestProgress(cropCycle) * 100}%`,
                       },
                     ]}
                   />
@@ -457,6 +484,186 @@ export default function DailyLogScreen() {
               </View>
             </View>
           </View>
+
+          {cropCycle?.id && feedScheduleError && !hasFeedSetup ? (
+            <View style={styles.infoCard}>
+              <Text style={styles.infoCardTitle}>Feed Recommendation</Text>
+              <Text style={styles.emptyInfoTitle}>No Feeding Schedule</Text>
+              <Text style={styles.emptyInfoBody}>{feedScheduleError}</Text>
+            </View>
+          ) : null}
+
+          {cropCycle?.id && !hasFeedSetup && !feedScheduleError ? (
+            <View style={[styles.setupCard, styles.feedCard]}>
+              <View style={[styles.setupIcon, styles.feedIcon]}>
+                <Feather name="coffee" size={18} color={colors.primaryDark} />
+              </View>
+              <Text style={styles.setupTitle}>Feed Management Required</Text>
+              <Text style={styles.setupBody}>
+                Configure your feeding schedules and feed types to optimize growth,
+                minimize waste, and track nutrition efficiency across your cycle.
+              </Text>
+              <Pressable
+                onPress={() => navigateWithPond("/feed-management")}
+                style={[styles.setupButton, styles.feedButton]}
+              >
+                <Text style={styles.feedButtonText}>
+                  Explore Feed Management →
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {cropCycle?.id && hasFeedSetup && feedSchedule ? (
+            <View style={styles.feedCard}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Feed Recommendation</Text>
+                <Pressable
+                  onPress={() => navigateWithPond("/feed-management")}
+                  style={styles.feedScheduleLink}
+                >
+                  <Text style={styles.sectionLink}>View Schedule</Text>
+                  <Feather name="chevron-right" size={14} color={colors.primary} />
+                </Pressable>
+              </View>
+
+              <View style={styles.feedHeroRow}>
+                <View style={styles.feedHeroCopy}>
+                  <Text style={styles.feedHeroLabel}>RECOMMENDED FEED</Text>
+                  <View style={styles.feedHeroValueRow}>
+                    <Text style={styles.feedHeroValue}>
+                      {feedSchedule.recommendedDailyKg}
+                    </Text>
+                    <Text style={styles.feedHeroUnit}>kg/day</Text>
+                  </View>
+                </View>
+                <View style={styles.feedHeroIcon}>
+                  <Feather name="package" size={18} color={colors.primary} />
+                </View>
+              </View>
+
+              <View style={styles.feedDivider} />
+
+              <View style={styles.feedMetricsRow}>
+                <View style={styles.feedMetricBlock}>
+                  <Text style={styles.feedMetricLabel}>FEEDS PER DAY</Text>
+                  <Text style={styles.feedMetricValue}>
+                    {feedSchedule.feedsPerDay} Times
+                  </Text>
+                </View>
+                <View style={styles.feedMetricBlock}>
+                  <Text style={styles.feedMetricLabel}>PER FEED QUANTITY</Text>
+                  <Text style={styles.feedMetricValue}>
+                    {feedSchedule.perFeedQty} kg
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.feedTimesSection}>
+                <Text style={styles.feedMetricLabel}>FEED TIMES</Text>
+                <View style={styles.feedTimesRow}>
+                  {feedSchedule.feedTimes.map((time) => {
+                    const isNext = time === feedSchedule.nextFeedRaw;
+
+                    return (
+                      <View
+                        key={time}
+                        style={[
+                          styles.feedTimeChip,
+                          isNext && styles.feedTimeChipActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.feedTimeChipText,
+                            isNext && styles.feedTimeChipTextActive,
+                          ]}
+                        >
+                          {formatFeedTimeDisplay(time)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.nextFeedBanner}>
+                <View style={styles.nextFeedBannerLeft}>
+                  <Feather name="clock" size={14} color={colors.primary} />
+                  <Text style={styles.nextFeedBannerText}>
+                    Next Feed at {feedSchedule.nextFeedTime}
+                  </Text>
+                </View>
+                <View style={styles.nextFeedBadge}>
+                  <Text style={styles.nextFeedBadgeText}>
+                    {feedSchedule.nextFeedQty}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
+
+          {cropCycle?.id && !hasPriceConfig ? (
+            <View style={styles.setupCard}>
+              <View style={styles.setupIcon}>
+                <Feather name="dollar-sign" size={18} color={colors.primary} />
+              </View>
+              <Text style={styles.setupTitle}>Expense Setup Required</Text>
+              <Text style={styles.setupBody}>
+                Configure prices for this crop cycle to track running costs, cost
+                per kg, and expense breakdown.
+              </Text>
+              <Pressable
+                onPress={() => navigateWithPond("/expense-setup")}
+                style={styles.setupButton}
+              >
+                <Text style={styles.setupButtonText}>Setup Expenses →</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {cropCycle?.id && hasPriceConfig ? (
+            <View style={styles.runningCostCard}>
+              <View style={styles.runningCostHeader}>
+                <Pressable
+                  onPress={() => navigateWithPond("/expense-details")}
+                  style={styles.runningCostMainPressable}
+                >
+                  <View style={styles.runningCostIcon}>
+                    <Feather name="dollar-sign" size={18} color={colors.primary} />
+                  </View>
+                  <View style={styles.runningCostCopy}>
+                    <Text style={styles.runningCostLabel}>Running Cost</Text>
+                    <Text style={styles.runningCostValue}>
+                      ₹ {(cycleExpenses?.total_cost ?? 0).toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={colors.muted} />
+                </Pressable>
+                <Pressable
+                  onPress={() => navigateWithPond("/expense-setup")}
+                  style={styles.editPriceButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit price configuration"
+                >
+                  <Feather name="edit-2" size={16} color={colors.primary} />
+                </Pressable>
+              </View>
+              <Pressable onPress={() => navigateWithPond("/expense-details")}>
+                <View style={styles.runningCostMetaRow}>
+                  <Text style={styles.runningCostMeta}>
+                    Cost/kg:{" "}
+                    {cycleExpenses?.cost_per_kg != null
+                      ? `₹ ${cycleExpenses.cost_per_kg.toFixed(2)}`
+                      : "—"}
+                  </Text>
+                  <Text style={styles.runningCostMeta}>
+                    {formatExpenseUpdatedAt(cycleExpenses?.computed_at)}
+                  </Text>
+                </View>
+              </Pressable>
+            </View>
+          ) : null}
 
           {showDataSourceSelection ? (
             <>
@@ -478,46 +685,6 @@ export default function DailyLogScreen() {
             </>
           ) : null}
 
-          {!showDashboardSections && !hasExpenseSetup ? (
-            <View style={styles.setupCard}>
-              <View style={styles.setupIcon}>
-                <Feather name="dollar-sign" size={18} color={colors.primary} />
-              </View>
-              <Text style={styles.setupTitle}>Explore Expense Setup</Text>
-              <Text style={styles.setupBody}>
-                Add every cost incurred on this pond only. Configure and track every
-                investment made in this specific pond for accurate ROI calculations.
-              </Text>
-              <Pressable
-                onPress={() => navigateWithPond("/expense-setup")}
-                style={styles.setupButton}
-              >
-                <Text style={styles.setupButtonText}>Setup Expenses →</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {!showDashboardSections && !hasFeedSetup ? (
-            <View style={[styles.setupCard, styles.feedCard]}>
-              <View style={[styles.setupIcon, styles.feedIcon]}>
-                <Feather name="coffee" size={18} color={colors.primaryDark} />
-              </View>
-              <Text style={styles.setupTitle}>Optimize Your Growth</Text>
-              <Text style={styles.setupBody}>
-                Configure your feeding schedules and feed types to optimize growth,
-                minimize waste, and track nutrition efficiency across your cycle.
-              </Text>
-              <Pressable
-                onPress={() => navigateWithPond("/feed-management")}
-                style={[styles.setupButton, styles.feedButton]}
-              >
-                <Text style={styles.feedButtonText}>
-                  Explore Feed Management →
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-
           {showDashboardSections && hasLogs ? (
             <>
               <View style={styles.sectionCard}>
@@ -527,6 +694,9 @@ export default function DailyLogScreen() {
                     <Text style={styles.sectionLink}>View Live Trend</Text>
                   </Pressable>
                 </View>
+                <Text style={styles.lastUpdatedText}>
+                  Last Updated: {lastUpdatedLabel}
+                </Text>
 
                 <ScrollView
                   horizontal
@@ -551,32 +721,52 @@ export default function DailyLogScreen() {
                 <View style={styles.growthGrid}>
                   <View style={styles.growthItem}>
                     <Text style={styles.growthLabel}>Total Biomass</Text>
-                    <Text style={styles.growthValue}>{pond?.biomass ?? "—"}</Text>
+                    <Text style={[styles.growthValue, { color: biomassColor }]}>
+                      {biomassValue}
+                    </Text>
+                    {abwStale ? (
+                      <Text style={styles.growthHint}>ABW update overdue</Text>
+                    ) : null}
                   </View>
                   <View style={styles.growthItem}>
                     <Text style={styles.growthLabel}>ABW</Text>
-                    <Text style={styles.growthValue}>{latestAbw}</Text>
-                    <Text style={styles.growthHint}>Updated Today</Text>
+                    <Text
+                      style={[
+                        styles.growthValue,
+                        abwStale ? { color: colors.warning } : null,
+                      ]}
+                    >
+                      {latestAbw}
+                    </Text>
+                    <Text style={styles.growthHint}>
+                      Updated {abwUpdatedLabel}
+                    </Text>
                   </View>
                   <View style={styles.growthItem}>
                     <Text style={styles.growthLabel}>Survival</Text>
                     <Text style={[styles.growthValue, { color: survivalColor }]}>
                       {survivalRate}
                     </Text>
-                    <Text style={styles.growthHint}>Optimal (&gt;85%)</Text>
+                    <Text style={styles.growthHint}>Target &gt;85%</Text>
                   </View>
                   <View style={styles.growthItem}>
                     <Text style={styles.growthLabel}>FCR</Text>
-                    <Text style={styles.growthValue}>1.32</Text>
-                    <Text style={styles.growthHint}>Good</Text>
+                    <Text style={[styles.growthValue, { color: fcrColor }]}>
+                      {fcrValue}
+                    </Text>
+                    <Text style={styles.growthHint}>
+                      Feed: {latestFeedQty}
+                    </Text>
                   </View>
                 </View>
                 <View style={styles.growthFooter}>
                   <Text style={styles.growthFooterText}>
-                    Cumulative Feed: {cumulativeFeed.toLocaleString("en-US")} kg
+                    Feed Brand: {latestFeedBrand}
                   </Text>
                   <Text style={styles.growthFooterText}>
-                    Mortality: {mortalityTotal}
+                    Mortality:{" "}
+                    <Text style={{ color: mortalityColor }}>{latestMortality}</Text>
+                    {" · "}Treatment: {latestTreatment}
                   </Text>
                 </View>
               </View>
@@ -588,7 +778,7 @@ export default function DailyLogScreen() {
                 </Pressable>
                 <View style={styles.logProgressMeta}>
                   <Text style={styles.logProgressLast}>
-                    Last: {pond?.lastLogTime ?? "No log today"}
+                    Last: {lastUpdatedLabel}
                   </Text>
                   <Text style={styles.logProgressCount}>
                     {Math.min(todayLogCount, 4)} / 4 Logs
@@ -604,11 +794,11 @@ export default function DailyLogScreen() {
                 </View>
               </View>
             </>
-          ) : showDashboardSections ? (
+          ) : !hasLogs ? (
             <>
               <View style={styles.infoCard}>
                 <Text style={styles.infoCardTitle}>Water Vitals</Text>
-                <Text style={styles.emptyInfoTitle}>Pending First Log</Text>
+                <Text style={styles.emptyInfoTitle}>No Pond Log</Text>
                 <Text style={styles.emptyInfoBody}>
                   Log Required. Record your first daily water parameter check.
                 </Text>
@@ -619,148 +809,12 @@ export default function DailyLogScreen() {
                 <View style={styles.placeholderImage}>
                   <Feather name="image" size={28} color={colors.muted} />
                 </View>
-                <Text style={styles.emptyInfoTitle}>Pending First Log</Text>
+                <Text style={styles.emptyInfoTitle}>No Pond Log</Text>
                 <Text style={styles.emptyInfoBody}>
                   Wait for your first sampling to see growth trends.
                 </Text>
               </View>
             </>
-          ) : (
-            <>
-              <View style={styles.infoCard}>
-                <Text style={styles.infoCardTitle}>Water Vitals</Text>
-                <Text style={styles.emptyInfoTitle}>No recent data</Text>
-                <Text style={styles.emptyInfoBody}>
-                  Log Required. Record your first daily water parameter check.
-                </Text>
-              </View>
-
-              <View style={styles.infoCard}>
-                <Text style={styles.infoCardTitle}>Growth & Biomass</Text>
-                <View style={styles.placeholderImage}>
-                  <Feather name="image" size={28} color={colors.muted} />
-                </View>
-                <Text style={styles.emptyInfoTitle}>Pending First Log</Text>
-                <Text style={styles.emptyInfoBody}>
-                  Wait for your first sampling to see growth trends.
-                </Text>
-              </View>
-            </>
-          )}
-
-          {showDashboardSections && !hasFeedSetup ? (
-            <View style={[styles.setupCard, styles.feedCard]}>
-              <View style={[styles.setupIcon, styles.feedIcon]}>
-                <Feather name="coffee" size={18} color={colors.primaryDark} />
-              </View>
-              <Text style={styles.setupTitle}>Optimize Your Growth</Text>
-              <Text style={styles.setupBody}>
-                Configure your feeding schedules and feed types to optimize growth,
-                minimize waste, and track nutrition efficiency across your cycle.
-              </Text>
-              <Pressable
-                onPress={() => navigateWithPond("/feed-management")}
-                style={[styles.setupButton, styles.feedButton]}
-              >
-                <Text style={styles.feedButtonText}>
-                  Explore Feed Management →
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {showDashboardSections && hasFeedSetup ? (
-            <View style={styles.sectionCard}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Feed Recommendation</Text>
-                <Pressable onPress={() => navigateWithPond("/feed-management")}>
-                  <Text style={styles.sectionLink}>Manage Feed Schedule</Text>
-                </Pressable>
-              </View>
-              <View style={styles.feedSummaryGrid}>
-                <View style={styles.feedSummaryItem}>
-                  <Text style={styles.feedSummaryLabel}>Recommended Feed</Text>
-                  <Text style={styles.feedSummaryValue}>
-                    {feedSchedule.dailyQty} kg/day
-                  </Text>
-                </View>
-                <View style={styles.feedSummaryItem}>
-                  <Text style={styles.feedSummaryLabel}>Feed Times</Text>
-                  <Text style={styles.feedSummaryValue}>
-                    {feedSchedule.feedingTimes}
-                  </Text>
-                </View>
-                <View style={styles.feedSummaryItem}>
-                  <Text style={styles.feedSummaryLabel}>Per Feed Quantity</Text>
-                  <Text style={styles.feedSummaryValue}>
-                    {feedSchedule.perFeedQty} kg
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.nextFeedRow}>
-                <Text style={styles.nextFeedText}>
-                  Last updated: {feedSchedule.lastUpdated || "Recently"}
-                </Text>
-                <View style={styles.nextFeedBadge}>
-                  <Text style={styles.nextFeedBadgeText}>
-                    Next: {feedSchedule.nextFeedTime}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          ) : null}
-
-          {showDashboardSections && !hasExpenseSetup ? (
-            <View style={styles.setupCard}>
-              <View style={styles.setupIcon}>
-                <Feather name="dollar-sign" size={18} color={colors.primary} />
-              </View>
-              <Text style={styles.setupTitle}>Explore Expense Setup</Text>
-              <Text style={styles.setupBody}>
-                Add every cost incurred on this pond only. Configure and track every
-                investment made in this specific pond for accurate ROI calculations.
-              </Text>
-              <Pressable
-                onPress={() => navigateWithPond("/expense-setup")}
-                style={styles.setupButton}
-              >
-                <Text style={styles.setupButtonText}>Setup Expenses →</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {showDashboardSections && hasExpenseSetup ? (
-            <View style={styles.sectionCard}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Expense Summary (This Cycle)</Text>
-                <Pressable onPress={() => navigateWithPond("/expense-setup")}>
-                  <Text style={styles.sectionLink}>Manage Expenses</Text>
-                </Pressable>
-              </View>
-              <Text style={styles.expenseTotal}>
-                ₹ {expenseTotal.toLocaleString("en-IN")}
-              </Text>
-              <View style={styles.expenseGrid}>
-                {[
-                  { label: "Feed", value: expenseBreakdown.feed },
-                  { label: "Seed", value: expenseBreakdown.seed },
-                  {
-                    label: "Other",
-                    value: expenseBreakdown.treatment + expenseBreakdown.labour,
-                  },
-                ].map((item) => (
-                  <View key={item.label} style={styles.expenseItem}>
-                    <Text style={styles.expenseItemLabel}>{item.label}</Text>
-                    <Text style={styles.expenseItemValue}>
-                      ₹ {item.value.toLocaleString("en-IN")}
-                    </Text>
-                    <Text style={styles.expenseItemPercent}>
-                      {formatPercent(item.value, expenseTotal)}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            </View>
           ) : null}
         </ScrollView>
 
@@ -805,6 +859,72 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  pressed: {
+    opacity: 0.92,
+  },
+  runningCostCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 10,
+  },
+  runningCostHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  runningCostMainPressable: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  runningCostIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: colors.softBlue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  runningCostCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  runningCostLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  runningCostValue: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: "900",
+  },
+  runningCostMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  runningCostMeta: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  editPriceButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: colors.softBlue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   profileChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -832,6 +952,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 110,
     gap: 14,
+  },
+  loadingState: {
+    paddingVertical: 24,
+    alignItems: "center",
   },
   pondHeroCard: {
     backgroundColor: colors.primaryDark,
@@ -1030,6 +1154,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "800",
   },
+  lastUpdatedText: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: -4,
+  },
   vitalsScroll: {
     gap: 10,
     paddingRight: 4,
@@ -1176,6 +1306,144 @@ const styles = StyleSheet.create({
   feedSummaryGrid: {
     gap: 10,
   },
+  feedCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 14,
+  },
+  feedScheduleLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  feedHeroRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  feedHeroCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  feedHeroLabel: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
+  feedHeroValueRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 6,
+  },
+  feedHeroValue: {
+    color: colors.text,
+    fontSize: 32,
+    fontWeight: "900",
+    lineHeight: 36,
+  },
+  feedHeroUnit: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  feedHeroIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.softBlue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  feedDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  feedMetricsRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  feedMetricBlock: {
+    flex: 1,
+    gap: 4,
+  },
+  feedMetricLabel: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  feedMetricValue: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  feedTimesSection: {
+    gap: 8,
+  },
+  feedTimesRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  feedTimeChip: {
+    backgroundColor: colors.background,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  feedTimeChipActive: {
+    backgroundColor: colors.softBlue,
+    borderColor: "#BFDBFE",
+  },
+  feedTimeChipText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  feedTimeChipTextActive: {
+    color: colors.primary,
+    fontWeight: "800",
+  },
+  nextFeedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.softBlue,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  nextFeedBannerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
+  nextFeedBannerText: {
+    color: colors.primaryDark,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  nextFeedBadge: {
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  nextFeedBadgeText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "800",
+  },
   feedSummaryItem: {
     backgroundColor: colors.background,
     borderRadius: 12,
@@ -1191,27 +1459,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 16,
     fontWeight: "900",
-  },
-  nextFeedRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  nextFeedText: {
-    color: colors.muted,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  nextFeedBadge: {
-    backgroundColor: colors.softBlue,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  nextFeedBadgeText: {
-    color: colors.primary,
-    fontSize: 11,
-    fontWeight: "800",
   },
   expenseTotal: {
     color: colors.text,

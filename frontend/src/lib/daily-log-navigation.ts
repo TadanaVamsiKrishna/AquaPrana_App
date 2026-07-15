@@ -1,11 +1,11 @@
 import type { Router } from "expo-router";
-import { pondHasLogsForActiveCycle } from "../services/local-daily-logs";
+import { pondHasLogs } from "../services/dailyLogs";
 
 export async function navigateToDailyLogEntry(
   router: Router,
   pondId: string,
 ) {
-  const hasLogs = await pondHasLogsForActiveCycle(pondId);
+  const hasLogs = await pondHasLogs(pondId);
 
   router.push({
     pathname: "/daily-log-entry",

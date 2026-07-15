@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StatusBar,
@@ -13,10 +14,25 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PondBottomNav } from "../components/pond-bottom-nav";
 import {
-  getClosedCyclesForPond,
-  type ClosedCycle,
-} from "../services/local-cycle-history";
-import { getPondById, type StoredPond } from "../services/local-ponds";
+  formatClosedCycleDateRange,
+  formatCycleFcr,
+  formatCycleStockingDate,
+  formatCycleSurvival,
+  getActiveCropCycleForPond,
+  getCropCyclesForPond,
+  getCycleDayFromRecord,
+  type CropCycleRecord,
+} from "../services/cropCycle";
+import { getLatestAbwLogForCycle } from "../services/dailyLogs";
+import { getSupabasePondById } from "../services/pond";
+import { generateAndOpenCycleReport } from "../services/reportService";
+import {
+  getAbwDisplayValue,
+  getFcrColor,
+  getSurvivalColorFromRate,
+  isAbwStale,
+} from "../lib/cycle-metrics";
+import { navigateBackToHome } from "../lib/pond-route";
 
 const colors = {
   primary: "#0A84FF",
@@ -29,15 +45,26 @@ const colors = {
   softBlue: "#E8F3FF",
   success: "#16A34A",
   successSoft: "#DCFCE7",
+  warning: "#F59E0B",
+  danger: "#EF4444",
+  mutedText: "#94A3B8",
 };
 
 export default function PondCyclesScreen() {
   const router = useRouter();
   const { pondId } = useLocalSearchParams<{ pondId: string }>();
 
-  const [pond, setPond] = useState<StoredPond | null>(null);
-  const [previousCycles, setPreviousCycles] = useState<ClosedCycle[]>([]);
+  const [pondName, setPondName] = useState("Pond Cycles");
+  const [activeCycle, setActiveCycle] = useState<CropCycleRecord | null>(null);
+  const [closedCycles, setClosedCycles] = useState<CropCycleRecord[]>([]);
+  const [latestAbwObservedAt, setLatestAbwObservedAt] = useState<string | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [downloadingReportCycleId, setDownloadingReportCycleId] = useState<
+    string | null
+  >(null);
 
   const loadData = useCallback(async () => {
     if (!pondId) {
@@ -45,13 +72,39 @@ export default function PondCyclesScreen() {
     }
 
     setIsLoading(true);
-    const [pondData, closedCycles] = await Promise.all([
-      getPondById(pondId),
-      getClosedCyclesForPond(pondId),
-    ]);
-    setPond(pondData);
-    setPreviousCycles(closedCycles);
-    setIsLoading(false);
+    setLoadError(null);
+
+    try {
+      const [pondData, cycles, active] = await Promise.all([
+        getSupabasePondById(pondId),
+        getCropCyclesForPond(pondId),
+        getActiveCropCycleForPond(pondId),
+      ]);
+
+      setPondName(pondData?.name?.trim() || "Pond Cycles");
+      setActiveCycle(active);
+      setClosedCycles(
+        cycles.filter((cycle) => cycle.status === "closed"),
+      );
+
+      if (active?.id) {
+        const latestAbwLog = await getLatestAbwLogForCycle(active.id);
+        setLatestAbwObservedAt(latestAbwLog?.observed_at ?? null);
+      } else {
+        setLatestAbwObservedAt(null);
+      }
+    } catch (error) {
+      console.log("[pond-cycles] load error:", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load cycle history.",
+      );
+      setActiveCycle(null);
+      setClosedCycles([]);
+    } finally {
+      setIsLoading(false);
+    }
   }, [pondId]);
 
   useFocusEffect(
@@ -60,14 +113,34 @@ export default function PondCyclesScreen() {
     }, [loadData]),
   );
 
+  const recordCount = useMemo(
+    () => (activeCycle ? 1 : 0) + closedCycles.length,
+    [activeCycle, closedCycles.length],
+  );
+
+  const activeCycleDay = getCycleDayFromRecord(activeCycle);
+  const abwStale = isAbwStale(latestAbwObservedAt);
+  const activeBiomass =
+    activeCycle?.current_biomass_kg != null
+      ? `${activeCycle.current_biomass_kg.toLocaleString("en-US")} kg`
+      : "—";
+  const activeAbw = getAbwDisplayValue(
+    activeCycle?.current_abw_g,
+    latestAbwObservedAt,
+  );
+  const activeFcrColor = getFcrColor(activeCycle?.estimated_fcr);
+  const activeSurvivalColor = getSurvivalColorFromRate(
+    activeCycle?.survival_rate,
+  );
+
   const handleGenerateReport = () => {
-    if (!pondId) {
+    if (!pondId || !activeCycle?.id) {
       return;
     }
 
     router.push({
       pathname: "/cycle-report",
-      params: { pondId },
+      params: { pondId, cycleId: activeCycle.id },
     } as never);
   };
 
@@ -82,7 +155,37 @@ export default function PondCyclesScreen() {
     } as never);
   };
 
-  const recordCount = 1 + previousCycles.length;
+  const handleViewLogs = (cycleId: string) => {
+    if (!pondId) {
+      return;
+    }
+
+    router.push({
+      pathname: "/pond-logs",
+      params: { pondId, cycleId },
+    } as never);
+  };
+
+  const handleDownloadReport = async (cycleId: string) => {
+    if (!pondId || downloadingReportCycleId) {
+      return;
+    }
+
+    setDownloadingReportCycleId(cycleId);
+
+    try {
+      await generateAndOpenCycleReport(cycleId);
+    } catch (error) {
+      Alert.alert(
+        "Report unavailable",
+        error instanceof Error
+          ? error.message
+          : "Unable to generate or open the cycle report.",
+      );
+    } finally {
+      setDownloadingReportCycleId(null);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -90,10 +193,13 @@ export default function PondCyclesScreen() {
 
       <View style={styles.screen}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.iconButton}>
+          <Pressable
+            onPress={() => navigateBackToHome(router)}
+            style={styles.iconButton}
+          >
             <Feather name="arrow-left" size={22} color={colors.text} />
           </Pressable>
-          <Text style={styles.headerTitle}>{pond?.pondName ?? "Pond Cycles"}</Text>
+          <Text style={styles.headerTitle}>{pondName}</Text>
           <View style={styles.iconButton} />
         </View>
 
@@ -114,78 +220,130 @@ export default function PondCyclesScreen() {
               color={colors.primary}
               style={styles.loader}
             />
+          ) : loadError ? (
+            <View style={styles.emptyPrevious}>
+              <Text style={styles.emptyPreviousTitle}>Unable to load cycles</Text>
+              <Text style={styles.emptyPreviousText}>{loadError}</Text>
+            </View>
           ) : (
             <>
-              <View style={styles.activeCard}>
-                <View style={styles.activeBadge}>
-                  <Text style={styles.activeBadgeText}>ACTIVE Current Cycle</Text>
-                </View>
+              {activeCycle ? (
+                <View style={styles.activeCard}>
+                  <View style={styles.activeBadge}>
+                    <Text style={styles.activeBadgeText}>ACTIVE Current Cycle</Text>
+                  </View>
 
-                <View style={styles.speciesRow}>
-                  <Feather name="droplet" size={16} color={colors.primary} />
-                  <Text style={styles.speciesText}>{pond?.species ?? "—"}</Text>
-                </View>
+                  <Text style={styles.pondNameText}>{pondName}</Text>
 
-                <View style={styles.detailGrid}>
-                  <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>Stocking Date</Text>
-                    <Text style={styles.detailValue}>
-                      {pond?.stockingDate ?? "—"}
+                  <View style={styles.speciesRow}>
+                    <Feather name="droplet" size={16} color={colors.primary} />
+                    <Text style={styles.speciesText}>
+                      {activeCycle.species ?? "—"}
                     </Text>
                   </View>
-                  <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>Cycle Length</Text>
-                    <Text style={styles.detailValue}>
-                      Day {pond?.cycleDay ?? "—"}
-                    </Text>
-                  </View>
-                </View>
 
-                <View style={styles.metricRow}>
-                  <View style={styles.metricBlock}>
-                    <Text style={styles.metricLabel}>FCR</Text>
-                    <Text style={styles.metricValue}>—</Text>
+                  <View style={styles.detailGrid}>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.detailLabel}>Stocking Date</Text>
+                      <Text style={styles.detailValue}>
+                        {formatCycleStockingDate(activeCycle.stocking_date)}
+                      </Text>
+                    </View>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.detailLabel}>Cycle Length</Text>
+                      <Text style={styles.detailValue}>
+                        {activeCycleDay != null ? `Day ${activeCycleDay}` : "—"}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={styles.metricBlock}>
-                    <Text style={styles.metricLabel}>Survival</Text>
-                    <Text style={[styles.metricValue, styles.survivalValue]}>
-                      {pond?.survivalRate ?? "—"}
-                    </Text>
-                  </View>
-                </View>
 
-                <View style={styles.actionRow}>
-                  <Pressable
-                    onPress={handleGenerateReport}
-                    style={styles.outlineButton}
-                  >
-                    <Text style={styles.outlineButtonText}>Generate Report</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={handleCloseCycle}
-                    style={styles.primaryButton}
-                  >
-                    <Feather name="power" size={14} color={colors.white} />
-                    <Text style={styles.primaryButtonText}>Close Cycle</Text>
-                  </Pressable>
+                  <View style={styles.metricRow}>
+                    <View style={styles.metricBlock}>
+                      <Text style={styles.metricLabel}>Biomass</Text>
+                      <Text
+                        style={[
+                          styles.metricValue,
+                          abwStale ? { color: colors.mutedText } : null,
+                        ]}
+                      >
+                        {activeBiomass}
+                      </Text>
+                    </View>
+                    <View style={styles.metricBlock}>
+                      <Text style={styles.metricLabel}>ABW</Text>
+                      <Text
+                        style={[
+                          styles.metricValue,
+                          abwStale ? { color: colors.warning } : null,
+                        ]}
+                      >
+                        {activeAbw}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.metricRow}>
+                    <View style={styles.metricBlock}>
+                      <Text style={styles.metricLabel}>FCR</Text>
+                      <Text style={[styles.metricValue, { color: activeFcrColor }]}>
+                        {formatCycleFcr(activeCycle.estimated_fcr)}
+                      </Text>
+                    </View>
+                    <View style={styles.metricBlock}>
+                      <Text style={styles.metricLabel}>Survival</Text>
+                      <Text
+                        style={[
+                          styles.metricValue,
+                          { color: activeSurvivalColor },
+                        ]}
+                      >
+                        {formatCycleSurvival(activeCycle.survival_rate)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.actionRow}>
+                    <Pressable
+                      onPress={handleGenerateReport}
+                      style={styles.outlineButton}
+                    >
+                      <Text style={styles.outlineButtonText}>Generate Report</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleCloseCycle}
+                      style={styles.primaryButton}
+                    >
+                      <Feather name="power" size={14} color={colors.white} />
+                      <Text style={styles.primaryButtonText}>Close Cycle</Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
+              ) : (
+                <View style={styles.emptyPrevious}>
+                  <Text style={styles.emptyPreviousTitle}>No Active Crop Cycle</Text>
+                  <Text style={styles.emptyPreviousText}>
+                    Start a new crop cycle to track performance here.
+                  </Text>
+                </View>
+              )}
 
               <Text style={styles.sectionTitle}>Previous Cycles</Text>
-              {previousCycles.length === 0 ? (
+              {closedCycles.length === 0 ? (
                 <View style={styles.emptyPrevious}>
                   <Text style={styles.emptyPreviousText}>
                     No previous cycles recorded for this pond yet.
                   </Text>
                 </View>
               ) : (
-                previousCycles.map((cycle) => (
+                closedCycles.map((cycle) => (
                   <View key={cycle.id} style={styles.previousCard}>
                     <View style={styles.previousHeader}>
                       <View style={styles.previousCopy}>
-                        <Text style={styles.previousSpecies}>{cycle.species}</Text>
+                        <Text style={styles.previousSpecies}>
+                          {cycle.species ?? "—"}
+                        </Text>
                         <Text style={styles.previousDates}>
-                          {cycle.stockingDate} - {cycle.harvestDate}
+                          {formatClosedCycleDateRange(cycle)}
                         </Text>
                       </View>
                       <Feather name="chevron-right" size={18} color={colors.muted} />
@@ -194,8 +352,13 @@ export default function PondCyclesScreen() {
                     <View style={styles.previousMetrics}>
                       <View style={styles.previousMetric}>
                         <Text style={styles.previousMetricLabel}>FCR</Text>
-                        <Text style={styles.previousMetricValue}>
-                          {cycle.finalFcr}
+                        <Text
+                          style={[
+                            styles.previousMetricValue,
+                            { color: getFcrColor(cycle.estimated_fcr) },
+                          ]}
+                        >
+                          {formatCycleFcr(cycle.estimated_fcr)}
                         </Text>
                       </View>
                       <View style={styles.previousMetric}>
@@ -203,12 +366,34 @@ export default function PondCyclesScreen() {
                         <Text
                           style={[
                             styles.previousMetricValue,
-                            styles.survivalValue,
+                            {
+                              color: getSurvivalColorFromRate(cycle.survival_rate),
+                            },
                           ]}
                         >
-                          {cycle.finalSurvival}
+                          {formatCycleSurvival(cycle.survival_rate)}
                         </Text>
                       </View>
+                    </View>
+
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        onPress={() => handleViewLogs(cycle.id)}
+                        style={styles.outlineButton}
+                      >
+                        <Text style={styles.outlineButtonText}>View Logs</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => handleDownloadReport(cycle.id)}
+                        disabled={downloadingReportCycleId === cycle.id}
+                        style={styles.outlineButton}
+                      >
+                        {downloadingReportCycleId === cycle.id ? (
+                          <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                          <Text style={styles.outlineButtonText}>Download PDF</Text>
+                        )}
+                      </Pressable>
                     </View>
                   </View>
                 ))
@@ -288,6 +473,11 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontSize: 11,
     fontWeight: "800",
+  },
+  pondNameText: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: "900",
   },
   speciesRow: {
     flexDirection: "row",
@@ -384,6 +574,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: 18,
+    gap: 6,
+  },
+  emptyPreviousTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "800",
   },
   emptyPreviousText: {
     color: colors.muted,

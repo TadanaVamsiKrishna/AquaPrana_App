@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,28 +17,21 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { resolvePondId } from "../lib/pond-route";
+import { formatCurrency, formatUnitPrice, parsePriceValue, sanitizeDecimalInput } from "../lib/expense-format";
 import {
-  formatCurrency,
-  parsePriceValue,
-  sanitizeDecimalInput,
-} from "../lib/expense-format";
-import { getFarmerPriceConfig, type FarmerPriceConfig } from "../services/farmer-price-config";
-import { getPondLogTotals } from "../services/local-daily-logs";
+  getActiveCropCycleForPond,
+  getCycleDayFromRecord,
+} from "../services/cropCycle";
+import { recalculateCycleExpenses } from "../services/cycleExpensesService";
 import {
-  calculateExpenseTotals,
-  type ExpensePriceMode,
-  type ManualExpense,
-  type PondPriceConfig,
-  type TreatmentProduct,
-} from "../services/local-pond-expenses";
-import { getPondById } from "../services/local-ponds";
-import {
-  getPondExpenseRecord,
-  priceInputValue,
-  recalculatePondExpenseRecord,
-  resolveCycleId,
-  savePondExpenseRecord,
-} from "../services/pond-expenses";
+  getPriceConfigByCycleId,
+  type OtherExpenseItem,
+  type TreatmentPriceItem,
+  upsertPriceConfig,
+} from "../services/priceConfigService";
+import { getSupabasePondById } from "../services/pond";
+
+const priceInputValue = (value: number) => formatUnitPrice(value);
 
 const colors = {
   primary: "#0A84FF",
@@ -58,84 +51,26 @@ const colors = {
   chartOthers: "#CBD5E1",
 };
 
-type ExpenseTab = "price" | "tracking";
-
-const UNIT_OPTIONS = ["Litre", "Kg", "Packet", "Bottle", "Unit"];
-
-const createProduct = (): TreatmentProduct => ({
+const createProduct = (): TreatmentPriceItem => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   name: "",
   unit: "Litre",
   price: 0,
 });
 
-function DonutSlice({
-  color,
-  size,
-  thickness,
-  startDeg,
-  sweepDeg,
-}: {
-  color: string;
-  size: number;
-  thickness: number;
-  startDeg: number;
-  sweepDeg: number;
-}) {
-  if (sweepDeg <= 0) {
-    return null;
-  }
-
-  const half = size / 2;
-  const clamped = Math.min(sweepDeg, 179.9);
-
-  return (
-    <View
-      pointerEvents="none"
-      style={[
-        styles.donutSlice,
-        {
-          width: size,
-          height: size,
-          transform: [{ rotate: `${startDeg}deg` }],
-        },
-      ]}
-    >
-      <View
-        style={{
-          width: size,
-          height: size,
-          borderRadius: half,
-          borderWidth: thickness,
-          borderColor: "transparent",
-          borderTopColor: color,
-          borderRightColor: clamped > 90 ? color : "transparent",
-          transform: [{ rotate: `${Math.max(clamped - 90, 0)}deg` }],
-        }}
-      />
-    </View>
-  );
-}
+const UNIT_OPTIONS = ["Litre", "Kg", "Packet", "Bottle", "Unit"];
 
 export default function ExpenseSetupScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ pondId: string; tab?: string }>();
+  const params = useLocalSearchParams<{ pondId: string }>();
   const pondId = resolvePondId(params.pondId);
 
-  const [activeTab, setActiveTab] = useState<ExpenseTab>(
-    params.tab === "tracking" ? "tracking" : "price",
-  );
+  const [cycleId, setCycleId] = useState<string | null>(null);
   const [cycleDay, setCycleDay] = useState(1);
   const [pondName, setPondName] = useState("Pond");
-  const [biomassKg, setBiomassKg] = useState(0);
-  const [stockingCount, setStockingCount] = useState(0);
-  const [feedKg, setFeedKg] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [priceMode, setPriceMode] = useState<ExpensePriceMode>("fixed");
-  const [savedGlobalConfig, setSavedGlobalConfig] =
-    useState<FarmerPriceConfig | null>(null);
   const [unitPickerFor, setUnitPickerFor] = useState<string | null>(null);
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [editingManualId, setEditingManualId] = useState<string | null>(null);
@@ -146,10 +81,10 @@ export default function ExpenseSetupScreen() {
   const [feedPrice, setFeedPrice] = useState("0.00");
   const [seedPrice, setSeedPrice] = useState("0.00");
   const [labourPrice, setLabourPrice] = useState("0.00");
-  const [products, setProducts] = useState<TreatmentProduct[]>([
+  const [products, setProducts] = useState<TreatmentPriceItem[]>([
     createProduct(),
   ]);
-  const [manualExpenses, setManualExpenses] = useState<ManualExpense[]>([]);
+  const [manualExpenses, setManualExpenses] = useState<OtherExpenseItem[]>([]);
 
   const loadData = useCallback(async () => {
     if (!pondId) {
@@ -160,65 +95,39 @@ export default function ExpenseSetupScreen() {
     setLoadError(null);
 
     try {
-      const pond = await getPondById(pondId);
-      const cycleId = resolveCycleId(pond?.stockingDate);
-
-      const [totals, globalResult, pondExpenseResult] = await Promise.all([
-        getPondLogTotals(pondId),
-        getFarmerPriceConfig(),
-        getPondExpenseRecord(pondId, cycleId),
+      const [pond, activeCycle] = await Promise.all([
+        getSupabasePondById(pondId),
+        getActiveCropCycleForPond(pondId),
       ]);
 
-      setPondName(pond?.pondName || pond?.name || "Pond");
-      setCycleDay(Math.max(Number(pond?.cycleDay) || 1, 1));
-      setFeedKg(totals.cumulativeFeed || 0);
+      if (!activeCycle) {
+        setLoadError("No active crop cycle found. Complete crop setup first.");
+        setCycleId(null);
+        return;
+      }
 
-      const biomassMatch = pond?.biomass?.match(/([\d,.]+)/);
-      setBiomassKg(biomassMatch ? Number(biomassMatch[1].replace(/,/g, "")) : 0);
+      setCycleId(activeCycle.id);
+      setPondName(pond?.name?.trim() || "Pond");
+      setCycleDay(getCycleDayFromRecord(activeCycle) ?? 1);
 
-      const density = Number(pond?.stockingDensity) || 0;
-      const area = Number(pond?.area) || 0;
-      setStockingCount(density > 0 ? density * Math.max(area, 1) * 1000 : 0);
+      const savedPriceConfig = await getPriceConfigByCycleId(activeCycle.id);
 
-      setSavedGlobalConfig(globalResult.config);
-      const mode = pondExpenseResult.record?.priceMode === "manual" ? "manual" : "fixed";
-      setPriceMode(mode);
-
-      const sourceConfig =
-        mode === "manual" && pondExpenseResult.record
-          ? {
-              feedPricePerKg: pondExpenseResult.record.prices.feedPricePerKg,
-              seedPricePerThousand:
-                pondExpenseResult.record.prices.seedPricePerThousand,
-              labourCostPerDay: pondExpenseResult.record.prices.labourCostPerDay,
-              treatmentProducts:
-                pondExpenseResult.record.treatmentProducts.length > 0
-                  ? pondExpenseResult.record.treatmentProducts
-                  : [
-                      {
-                        id: createProduct().id,
-                        name: "Treatment / Mineral",
-                        unit: "Unit",
-                        price: pondExpenseResult.record.prices.treatmentPricePerUnit,
-                      },
-                    ],
-            }
-          : globalResult.config;
-
-      setFeedPrice(priceInputValue(sourceConfig.feedPricePerKg));
-      setSeedPrice(priceInputValue(sourceConfig.seedPricePerThousand));
-      setLabourPrice(priceInputValue(sourceConfig.labourCostPerDay));
-      setProducts(
-        sourceConfig.treatmentProducts?.length
-          ? sourceConfig.treatmentProducts
-          : [createProduct()],
-      );
-
-      setManualExpenses(pondExpenseResult.record?.manualExpenses ?? []);
-
-      const errors = [globalResult.error, pondExpenseResult.error].filter(Boolean);
-      if (errors.length > 0) {
-        setLoadError(errors.join(" "));
+      if (savedPriceConfig) {
+        setFeedPrice(priceInputValue(savedPriceConfig.feed_price_per_kg ?? 0));
+        setSeedPrice(priceInputValue(savedPriceConfig.seed_price_per_1000 ?? 0));
+        setLabourPrice(priceInputValue(savedPriceConfig.labour_cost_per_day ?? 0));
+        setProducts(
+          savedPriceConfig.treatment_prices.length > 0
+            ? savedPriceConfig.treatment_prices
+            : [createProduct()],
+        );
+        setManualExpenses(savedPriceConfig.other_expenses ?? []);
+      } else {
+        setFeedPrice("0.00");
+        setSeedPrice("0.00");
+        setLabourPrice("0.00");
+        setProducts([createProduct()]);
+        setManualExpenses([]);
       }
     } catch (error) {
       setLoadError(
@@ -235,58 +144,9 @@ export default function ExpenseSetupScreen() {
     }, [loadData]),
   );
 
-  const priceConfig: PondPriceConfig = useMemo(
-    () => ({
-      feedPricePerKg: parsePriceValue(feedPrice),
-      seedPricePerThousand: parsePriceValue(seedPrice),
-      labourCostPerDay: parsePriceValue(labourPrice),
-      treatmentProducts: products.map((product) => ({
-        ...product,
-        price: parsePriceValue(product.price),
-      })),
-    }),
-    [feedPrice, seedPrice, labourPrice, products],
-  );
-
-  const pricesEditable = priceMode === "manual";
-
-  const totals = useMemo(
-    () =>
-      calculateExpenseTotals({
-        feedKg,
-        stockingCount,
-        cycleDays: cycleDay,
-        priceConfig,
-        manualExpenses,
-      }),
-    [feedKg, stockingCount, cycleDay, priceConfig, manualExpenses],
-  );
-
-  const projectedCostPerKg =
-    biomassKg > 0 ? totals.total / biomassKg : totals.total > 0 ? totals.total : 0;
-
-  const chartSegments = useMemo(() => {
-    const values = [
-      { label: "Feed", value: totals.feed, color: colors.chartFeed },
-      { label: "Seed", value: totals.seed, color: colors.chartSeed },
-      { label: "Treatment", value: totals.treatment, color: colors.chartTreatment },
-      { label: "Others", value: totals.others + totals.labour, color: colors.chartOthers },
-    ];
-    const sum = values.reduce((acc, item) => acc + item.value, 0) || 1;
-    let cursor = -90;
-
-    return values.map((item) => {
-      const percent = Math.round((item.value / sum) * 100);
-      const sweep = (item.value / sum) * 360;
-      const start = cursor;
-      cursor += sweep;
-      return { ...item, percent, start, sweep };
-    });
-  }, [totals]);
-
   const updateProduct = (
     id: string,
-    patch: Partial<TreatmentProduct>,
+    patch: Partial<TreatmentPriceItem>,
   ) => {
     setProducts((current) =>
       current.map((product) =>
@@ -301,7 +161,7 @@ export default function ExpenseSetupScreen() {
     );
   };
 
-  const openManualModal = (expense?: ManualExpense) => {
+  const openManualModal = (expense?: OtherExpenseItem) => {
     if (expense) {
       setEditingManualId(expense.id);
       setManualTitle(expense.title);
@@ -368,128 +228,53 @@ export default function ExpenseSetupScreen() {
     ]);
   };
 
-  const applyGlobalPrices = () => {
-    if (!savedGlobalConfig) {
-      return;
-    }
-
-    setFeedPrice(priceInputValue(savedGlobalConfig.feedPricePerKg));
-    setSeedPrice(priceInputValue(savedGlobalConfig.seedPricePerThousand));
-    setLabourPrice(priceInputValue(savedGlobalConfig.labourCostPerDay));
-    setProducts(
-      savedGlobalConfig.treatmentProducts?.length
-        ? savedGlobalConfig.treatmentProducts
-        : [createProduct()],
-    );
-  };
-
-  const handlePriceModeChange = (mode: ExpensePriceMode) => {
-    setPriceMode(mode);
-    if (mode === "fixed") {
-      applyGlobalPrices();
-    }
-  };
-
-  const persistExpenses = async (configured: boolean) => {
-    if (!pondId) {
-      Alert.alert("Pond not found", "Please go back and try again.");
+  const persistExpenses = async () => {
+    if (!pondId || !cycleId) {
+      Alert.alert("Cycle not found", "Please complete crop setup before saving prices.");
       return false;
     }
 
-    if (configured && priceConfig.feedPricePerKg <= 0) {
+    const feedPricePerKg = parsePriceValue(feedPrice);
+    if (feedPricePerKg <= 0) {
       Alert.alert("Feed price required", "Enter Feed Price (₹/kg) before saving.");
-      setActiveTab("price");
       return false;
     }
 
-    const pond = await getPondById(pondId);
-    const cycleId = resolveCycleId(pond?.stockingDate);
-    const globalConfig = savedGlobalConfig ?? {
-      feedPricePerKg: 0,
-      seedPricePerThousand: 0,
-      labourCostPerDay: 0,
-      treatmentProducts: [],
-    };
-
-    const baseRecord = recalculatePondExpenseRecord({
-      record: {
-        pondId,
-        cycleId,
-        priceMode,
-        quantities: {
-          feedKg,
-          seedCount: stockingCount,
-          treatmentQty: 0,
-        },
-        prices: {
-          feedPricePerKg: priceConfig.feedPricePerKg,
-          seedPricePerThousand: priceConfig.seedPricePerThousand,
-          treatmentPricePerUnit:
-            priceConfig.treatmentProducts.reduce(
-              (sum, product) => sum + parsePriceValue(product.price),
-              0,
-            ) / Math.max(priceConfig.treatmentProducts.length, 1),
-          labourCostPerDay: priceConfig.labourCostPerDay,
-        },
-        treatmentProducts: priceConfig.treatmentProducts,
-        manualExpenses,
-        feed: totals.feed,
-        seed: totals.seed,
-        treatment: totals.treatment,
-        labour: totals.labour,
-        others: totals.others,
-        total: totals.total,
-        configured: configured || totals.total > 0,
-      },
-      globalConfig,
-      feedKg,
-      stockingCount,
-      cycleDays: cycleDay,
+    await upsertPriceConfig(cycleId, {
+      feedPricePerKg,
+      seedPricePerThousand: parsePriceValue(seedPrice),
+      labourCostPerDay: parsePriceValue(labourPrice),
+      treatmentPrices: products.map((product) => ({
+        ...product,
+        price: parsePriceValue(product.price),
+      })),
+      otherExpenses: manualExpenses,
     });
 
-    const result = await savePondExpenseRecord(baseRecord);
-    if (result.error) {
-      Alert.alert("Saved with warning", result.error);
-    }
-
+    await recalculateCycleExpenses(cycleId);
     return true;
   };
 
   const handleSaveConfiguration = async () => {
     setIsSaving(true);
-    const saved = await persistExpenses(true);
-    setIsSaving(false);
+    try {
+      const saved = await persistExpenses();
+      if (!saved) {
+        return;
+      }
 
-    if (!saved) {
-      return;
+      router.replace({
+        pathname: "/daily-log",
+        params: { pondId },
+      } as never);
+    } catch (error) {
+      Alert.alert(
+        "Save failed",
+        error instanceof Error ? error.message : "Could not save price configuration.",
+      );
+    } finally {
+      setIsSaving(false);
     }
-
-    Alert.alert("Saved", "Pond expense configuration saved.", [
-      {
-        text: "View Expenses",
-        onPress: () => setActiveTab("tracking"),
-      },
-      {
-        text: "Back to Dashboard",
-        onPress: () =>
-          router.replace({
-            pathname: "/daily-log",
-            params: { pondId },
-          } as never),
-      },
-    ]);
-  };
-
-  const handleDownloadReport = async () => {
-    const saved = await persistExpenses(true);
-    if (!saved) {
-      return;
-    }
-
-    Alert.alert(
-      "Expense Report",
-      `Total Cycle Cost: ${formatCurrency(totals.total)}\nProjected: ₹${projectedCostPerKg.toFixed(2)} / kg\n\nPDF export will be added soon.`,
-    );
   };
 
   const renderPriceConfig = () => (
@@ -501,8 +286,8 @@ export default function ExpenseSetupScreen() {
       <View style={styles.infoBanner}>
         <Feather name="info" size={16} color={colors.primary} />
         <Text style={styles.infoBannerText}>
-          Global farmer prices load by default. Switch to manual override only for
-          this pond — global prices stay unchanged.
+          Set prices for this crop cycle. Running costs are calculated from these
+          values and your pond logs.
         </Text>
       </View>
 
@@ -512,31 +297,6 @@ export default function ExpenseSetupScreen() {
           <Text style={styles.warningText}>{loadError}</Text>
         </View>
       ) : null}
-
-      <Text style={styles.sectionTitle}>Price Mode</Text>
-      <View style={styles.modeRow}>
-        {(
-          [
-            { id: "fixed", label: "Use fixed prices" },
-            { id: "manual", label: "Enter prices manually" },
-          ] as const
-        ).map((option) => {
-          const isActive = priceMode === option.id;
-          return (
-            <Pressable
-              key={option.id}
-              onPress={() => handlePriceModeChange(option.id)}
-              style={[styles.modeChip, isActive && styles.modeChipActive]}
-            >
-              <Text
-                style={[styles.modeChipText, isActive && styles.modeChipTextActive]}
-              >
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
 
       <Text style={styles.sectionTitle}>Basic Prices</Text>
       <View style={styles.card}>
@@ -548,7 +308,6 @@ export default function ExpenseSetupScreen() {
             <TextInput
               value={feedPrice}
               onChangeText={(value) => setFeedPrice(sanitizeDecimalInput(value))}
-              editable={pricesEditable}
               keyboardType="decimal-pad"
               inputMode="decimal"
               style={styles.input}
@@ -565,7 +324,6 @@ export default function ExpenseSetupScreen() {
             <TextInput
               value={seedPrice}
               onChangeText={(value) => setSeedPrice(sanitizeDecimalInput(value))}
-              editable={pricesEditable}
               keyboardType="decimal-pad"
               inputMode="decimal"
               style={styles.input}
@@ -581,7 +339,6 @@ export default function ExpenseSetupScreen() {
             <TextInput
               value={labourPrice}
               onChangeText={(value) => setLabourPrice(sanitizeDecimalInput(value))}
-              editable={pricesEditable}
               keyboardType="decimal-pad"
               inputMode="decimal"
               style={styles.input}
@@ -628,7 +385,6 @@ export default function ExpenseSetupScreen() {
                       price: parsePriceValue(sanitizeDecimalInput(value)),
                     })
                   }
-                  editable={pricesEditable}
                   keyboardType="decimal-pad"
                   inputMode="decimal"
                   style={styles.input}
@@ -648,122 +404,11 @@ export default function ExpenseSetupScreen() {
 
       <Pressable
         onPress={() => setProducts((current) => [...current, createProduct()])}
-        disabled={!pricesEditable}
-        style={[styles.addProductButton, !pricesEditable && styles.buttonDisabled]}
+        style={styles.addProductButton}
       >
         <Feather name="plus" size={16} color={colors.primary} />
         <Text style={styles.addProductText}>+ Add Product</Text>
       </Pressable>
-    </ScrollView>
-  );
-
-  const renderTracking = () => (
-    <ScrollView
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryTop}>
-          <View>
-            <Text style={styles.summaryEyebrow}>TOTAL CYCLE COST</Text>
-            <Text style={styles.summaryTotal}>{formatCurrency(totals.total)}</Text>
-          </View>
-          <View style={styles.onTrackBadge}>
-            <Feather name="check" size={12} color={colors.success} />
-            <Text style={styles.onTrackText}>On Track</Text>
-          </View>
-        </View>
-
-        <View style={styles.donutWrap}>
-          <View style={styles.donutOuter}>
-            {chartSegments.map((segment) => (
-              <DonutSlice
-                key={segment.label}
-                color={segment.color}
-                size={140}
-                thickness={18}
-                startDeg={segment.start}
-                sweepDeg={segment.sweep}
-              />
-            ))}
-            <View style={styles.donutHole}>
-              <Text style={styles.donutHoleLabel}>Cost</Text>
-              <Text style={styles.donutHoleValue}>
-                {formatCurrency(totals.total)}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.legendRow}>
-          {chartSegments.map((segment) => (
-            <View key={segment.label} style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: segment.color }]} />
-              <Text style={styles.legendText}>
-                {segment.label} ({segment.percent}%)
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.projectedRow}>
-          <Text style={styles.projectedLabel}>Projected Cost Per Kg</Text>
-          <Text style={styles.projectedValue}>
-            ₹{projectedCostPerKg.toFixed(2)} / kg
-          </Text>
-        </View>
-      </View>
-
-      <Text style={styles.sectionTitle}>Auto-calculated Expenses</Text>
-      <View style={styles.card}>
-        {[
-          {
-            icon: "coffee" as const,
-            title: "Feed Cost",
-            note: "Based on daily feed logs",
-            amount: totals.feed,
-            action: () =>
-              router.push({
-                pathname: "/pond-logs",
-                params: { pondId },
-              } as never),
-          },
-          {
-            icon: "droplet" as const,
-            title: "Seed (PL) Cost",
-            note: "Based on PL stocked",
-            amount: totals.seed,
-          },
-          {
-            icon: "package" as const,
-            title: "Treatment & Minerals",
-            note: "Based on products used",
-            amount: totals.treatment,
-          },
-          {
-            icon: "users" as const,
-            title: "Labour Cost",
-            note: `Based on ${cycleDay} cycle days`,
-            amount: totals.labour,
-          },
-        ].map((item) => (
-          <View key={item.title} style={styles.autoRow}>
-            <View style={styles.autoIcon}>
-              <Feather name={item.icon} size={16} color={colors.primary} />
-            </View>
-            <View style={styles.autoCopy}>
-              <Text style={styles.autoTitle}>{item.title}</Text>
-              <Text style={styles.autoNote}>{item.note}</Text>
-              {item.action ? (
-                <Pressable onPress={item.action}>
-                  <Text style={styles.autoLink}>View Logs &gt;</Text>
-                </Pressable>
-              ) : null}
-            </View>
-            <Text style={styles.autoAmount}>{formatCurrency(item.amount)}</Text>
-          </View>
-        ))}
-      </View>
 
       <View style={styles.otherHeader}>
         <Text style={styles.sectionTitle}>Other Expenses</Text>
@@ -775,7 +420,7 @@ export default function ExpenseSetupScreen() {
       <View style={styles.card}>
         {manualExpenses.length === 0 ? (
           <Text style={styles.emptyManual}>
-            No manual expenses yet. Add power, rent, transport, or other costs.
+            Add power, rent, transport, or other costs for this cycle.
           </Text>
         ) : (
           manualExpenses.map((expense) => (
@@ -822,9 +467,7 @@ export default function ExpenseSetupScreen() {
               <Feather name="arrow-left" size={20} color={colors.white} />
             </Pressable>
             <View style={styles.headerCenter}>
-              <Text style={styles.headerTitle}>
-                {activeTab === "price" ? "Price Configuration" : "Expense Tracking"}
-              </Text>
+              <Text style={styles.headerTitle}>Price Configuration</Text>
               <View style={styles.dayBadge}>
                 <Feather name="calendar" size={12} color={colors.white} />
                 <Text style={styles.dayBadgeText}>
@@ -832,101 +475,32 @@ export default function ExpenseSetupScreen() {
                 </Text>
               </View>
             </View>
-            <Pressable
-              onPress={() =>
-                Alert.alert(
-                  "Expense settings",
-                  "Configure prices and track cycle expenses for this pond.",
-                )
-              }
-              style={styles.headerIcon}
-            >
-              <Feather
-                name={activeTab === "price" ? "bell" : "settings"}
-                size={18}
-                color={colors.white}
-              />
-            </Pressable>
-          </View>
-
-          <View style={styles.tabRow}>
-            <Pressable
-              onPress={() => setActiveTab("price")}
-              style={styles.tabButton}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "price" && styles.tabTextActive,
-                ]}
-              >
-                Price Config
-              </Text>
-              {activeTab === "price" ? <View style={styles.tabIndicator} /> : null}
-            </Pressable>
-            <Pressable
-              onPress={() => setActiveTab("tracking")}
-              style={styles.tabButton}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "tracking" && styles.tabTextActive,
-                ]}
-              >
-                Expense Tracking
-              </Text>
-              {activeTab === "tracking" ? (
-                <View style={styles.tabIndicator} />
-              ) : null}
-            </Pressable>
+            <View style={styles.headerIcon} />
           </View>
 
           {isLoading ? (
             <View style={styles.loadingState}>
               <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={styles.loadingText}>Loading expenses...</Text>
+              <Text style={styles.loadingText}>Loading prices...</Text>
             </View>
-          ) : activeTab === "price" ? (
-            renderPriceConfig()
           ) : (
-            renderTracking()
+            renderPriceConfig()
           )}
 
           <View style={styles.footer}>
-            {activeTab === "price" ? (
-              <Pressable
-                onPress={handleSaveConfiguration}
-                disabled={isSaving}
-                style={styles.primaryButton}
-              >
-                <Feather name="save" size={16} color={colors.white} />
-                <Text style={styles.primaryButtonText}>
-                  {isSaving ? "Saving..." : "Save Configuration"}
-                </Text>
-              </Pressable>
-            ) : (
-              <>
-                <Pressable
-                  onPress={() => openManualModal()}
-                  style={styles.primaryButton}
-                >
-                  <Feather name="plus" size={16} color={colors.white} />
-                  <Text style={styles.primaryButtonText}>
-                    Add New Manual Expense
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleDownloadReport}
-                  style={styles.outlineButton}
-                >
-                  <Feather name="download" size={16} color={colors.primary} />
-                  <Text style={styles.outlineButtonText}>
-                    Download Expense Report (PDF)
-                  </Text>
-                </Pressable>
-              </>
-            )}
+            <Pressable
+              onPress={handleSaveConfiguration}
+              disabled={isSaving || !cycleId}
+              style={[
+                styles.primaryButton,
+                (isSaving || !cycleId) && styles.buttonDisabled,
+              ]}
+            >
+              <Feather name="save" size={16} color={colors.white} />
+              <Text style={styles.primaryButtonText}>
+                {isSaving ? "Saving..." : "Save Configuration"}
+              </Text>
+            </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>

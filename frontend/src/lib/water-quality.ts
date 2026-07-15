@@ -257,7 +257,7 @@ export const getSurvivalColor = (survivalRate: string) => {
     return statusColors.none;
   }
 
-  if (value >= 85) {
+  if (value > 85) {
     return statusColors.good;
   }
 

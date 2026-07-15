@@ -17,10 +17,13 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   buildFeedingTimes,
-  getFeedScheduleForPond,
-  saveFeedSchedule,
+  getFeedingScheduleForCycle,
+  mapIntervalRuleFromDb,
+  normalizeFeedTimes,
+  saveFeedingSchedule,
   type FeedCalculationRule,
-} from "../services/local-feed-schedule";
+} from "../services/feedingScheduleService";
+import { getActiveCropCycleForPond } from "../services/cropCycle";
 import { resolvePondId } from "../lib/pond-route";
 
 const colors = {
@@ -71,23 +74,47 @@ export default function FeedManagementScreen() {
   const [rulePickerOpen, setRulePickerOpen] = useState(false);
   const [brandPickerOpen, setBrandPickerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadSchedule = useCallback(async () => {
     if (!pondId) {
       return;
     }
 
-    const schedule = await getFeedScheduleForPond(pondId);
+    setIsLoading(true);
+    setLoadError(null);
 
-    if (!schedule) {
-      return;
+    try {
+      const activeCycle = await getActiveCropCycleForPond(pondId);
+
+      if (!activeCycle?.id) {
+        return;
+      }
+
+      const schedule = await getFeedingScheduleForCycle(activeCycle.id);
+
+      if (!schedule) {
+        return;
+      }
+
+      setFeedsPerDay(schedule.feeds_per_day);
+      setFeedingTimes(
+        normalizeFeedTimes(schedule.feed_times, schedule.feeds_per_day),
+      );
+      setInitialQuantity(String(schedule.feed_rate_pct ?? "0.00"));
+      setCalculationRule(mapIntervalRuleFromDb(schedule.interval_rule));
+      setFeedBrand(schedule.default_brand ?? "");
+    } catch (error) {
+      console.log("[feed-management] load error:", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load feeding schedule.",
+      );
+    } finally {
+      setIsLoading(false);
     }
-
-    setFeedsPerDay(schedule.feedsPerDay);
-    setFeedingTimes(schedule.feedingTimes);
-    setInitialQuantity(schedule.initialQuantity);
-    setCalculationRule(schedule.calculationRule);
-    setFeedBrand(schedule.feedBrand);
   }, [pondId]);
 
   useFocusEffect(
@@ -116,21 +143,31 @@ export default function FeedManagementScreen() {
 
     setIsSaving(true);
 
-    await saveFeedSchedule({
-      pondId,
-      feedsPerDay,
-      feedingTimes,
-      initialQuantity,
-      calculationRule,
-      feedBrand,
-      updatedAt: new Date().toISOString(),
-    });
+    try {
+      await saveFeedingSchedule({
+        pondId,
+        feedsPerDay,
+        feedingTimes,
+        initialQuantity,
+        calculationRule,
+        feedBrand,
+      });
 
-    setIsSaving(false);
-    router.replace({
-      pathname: "/daily-log",
-      params: { pondId },
-    } as never);
+      router.replace({
+        pathname: "/daily-log",
+        params: { pondId },
+      } as never);
+    } catch (error) {
+      console.log("[feed-management] save error:", error);
+      Alert.alert(
+        "Unable to save schedule",
+        error instanceof Error
+          ? error.message
+          : "Please try again in a moment.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -163,6 +200,19 @@ export default function FeedManagementScreen() {
               <Text style={styles.heroEyebrow}>FEED MANAGEMENT</Text>
               <Text style={styles.heroTitle}>Optimization Hub</Text>
             </View>
+
+            {isLoading ? (
+              <View style={styles.loadingCard}>
+                <Text style={styles.loadingText}>Loading schedule...</Text>
+              </View>
+            ) : null}
+
+            {loadError ? (
+              <View style={styles.errorCard}>
+                <Text style={styles.errorTitle}>Unable to load schedule</Text>
+                <Text style={styles.errorBody}>{loadError}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.card}>
               <View style={styles.cardHeader}>
@@ -394,6 +444,38 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 24,
     fontWeight: "900",
+  },
+  loadingCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    alignItems: "center",
+  },
+  loadingText: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  errorCard: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    padding: 16,
+    gap: 4,
+  },
+  errorTitle: {
+    color: "#B91C1C",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  errorBody: {
+    color: "#991B1B",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "500",
   },
   card: {
     backgroundColor: colors.white,

@@ -15,7 +15,6 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { BottomNav } from "../components/bottom-nav";
 import {
   formatCurrency,
   formatPriceLabel,
@@ -956,8 +955,6 @@ export default function ExpensesScreen() {
           ) : (
             renderTracking()
           )}
-
-          <BottomNav activeTab="expenses" />
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

@@ -11,8 +11,19 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { getLogsForPond } from "../services/local-daily-logs";
-import { getPondById, type StoredPond } from "../services/local-ponds";
+import { getLogsForCycle, getLogsForPond } from "../services/dailyLogs";
+import {
+  getActiveCropCycleForPond,
+  getCropCycleById,
+  getCycleDayFromRecord,
+} from "../services/cropCycle";
+import { getSupabasePondById } from "../services/pond";
+import {
+  generateCycleReport,
+  openCycleReport,
+  shareCycleReport,
+  type CycleReportResult,
+} from "../services/reportService";
 
 const colors = {
   primary: "#0A84FF",
@@ -73,11 +84,24 @@ function ProgressRing({ progress }: { progress: number }) {
 
 export default function CycleReportScreen() {
   const router = useRouter();
-  const { pondId } = useLocalSearchParams<{ pondId: string }>();
-  const [pond, setPond] = useState<StoredPond | null>(null);
+  const { pondId, cycleId } = useLocalSearchParams<{
+    pondId: string;
+    cycleId?: string;
+  }>();
+  const [pondName, setPondName] = useState("Pond");
   const [logCount, setLogCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [cycleDays, setCycleDays] = useState(0);
+  const [hasBiomassData, setHasBiomassData] = useState(false);
+  const [resolvedCycleId, setResolvedCycleId] = useState<string | null>(null);
+  const [reportResult, setReportResult] = useState<CycleReportResult | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [isOpeningReport, setIsOpeningReport] = useState(false);
+  const [isSharingReport, setIsSharingReport] = useState(false);
+  const [generationAttempt, setGenerationAttempt] = useState(0);
 
   const loadData = useCallback(async () => {
     if (!pondId) {
@@ -85,15 +109,41 @@ export default function CycleReportScreen() {
     }
 
     setIsLoading(true);
-    const [pondData, logs] = await Promise.all([
-      getPondById(pondId),
-      getLogsForPond(pondId),
-    ]);
+    setLoadError(null);
 
-    setPond(pondData);
-    setLogCount(logs.length);
-    setIsLoading(false);
-  }, [pondId]);
+    try {
+      const pondData = await getSupabasePondById(pondId);
+      const cycle = cycleId
+        ? await getCropCycleById(cycleId)
+        : await getActiveCropCycleForPond(pondId);
+      const logs = cycle?.id
+        ? await getLogsForCycle(cycle.id)
+        : await getLogsForPond(pondId);
+
+      setPondName(pondData?.name?.trim() || "Pond");
+      setLogCount(logs.length);
+      setCycleDays(getCycleDayFromRecord(cycle) ?? 0);
+      setHasBiomassData(
+        cycle?.current_biomass_kg != null && cycle.current_biomass_kg > 0,
+      );
+      setResolvedCycleId(cycle?.id ?? null);
+      setReportResult(null);
+      setGenerateError(null);
+
+      if (!cycle?.id) {
+        setLoadError("No crop cycle found for this report.");
+      }
+    } catch (error) {
+      console.log("[cycle-report] load error:", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load cycle report data.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, [pondId, cycleId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -102,38 +152,61 @@ export default function CycleReportScreen() {
   );
 
   useEffect(() => {
-    if (isLoading) {
+    if (isLoading || !resolvedCycleId) {
       return;
     }
 
+    let cancelled = false;
+
+    const runGeneration = async () => {
+      setIsGenerating(true);
+      setGenerateError(null);
+      setProgress(0);
+
+      const progressTimer = setInterval(() => {
+        setProgress((current) => (current >= 90 ? current : current + 6));
+      }, 250);
+
+      try {
+        const result = await generateCycleReport(resolvedCycleId);
+
+        if (cancelled) {
+          return;
+        }
+
+        setReportResult(result);
+        setProgress(100);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setGenerateError(
+          error instanceof Error
+            ? error.message
+            : "Unable to generate cycle report.",
+        );
+      } finally {
+        clearInterval(progressTimer);
+        if (!cancelled) {
+          setIsGenerating(false);
+        }
+      }
+    };
+
+    void runGeneration();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading, resolvedCycleId, generationAttempt]);
+
+  const handleRetryGeneration = () => {
+    setGenerateError(null);
+    setReportResult(null);
     setProgress(0);
-
-    const timer = setInterval(() => {
-      setProgress((current) => {
-        if (current >= 99) {
-          clearInterval(timer);
-          return 99;
-        }
-
-        if (current < 72) {
-          return current + 9;
-        }
-
-        if (current < 90) {
-          return current + 3;
-        }
-
-        return current + 1;
-      });
-    }, 180);
-
-    return () => clearInterval(timer);
-  }, [isLoading, pondId]);
-
-  const cycleDays = useMemo(() => {
-    const dayValue = Number(pond?.cycleDay ?? "0");
-    return Number.isFinite(dayValue) && dayValue > 0 ? dayValue : 0;
-  }, [pond]);
+    setGenerationAttempt((current) => current + 1);
+  };
 
   const pipeline: { label: string; status: PipelineStatus }[] = useMemo(
     () => [
@@ -143,19 +216,72 @@ export default function CycleReportScreen() {
       },
       {
         label: "Feed efficiency",
-        status: pond?.biomass && pond.biomass !== "—" ? "Complete" : "Waiting",
+        status: hasBiomassData ? "Complete" : "Waiting",
       },
       {
         label: "Expense logs",
         status: "Waiting",
       },
     ],
-    [logCount, pond],
+    [logCount, hasBiomassData],
   );
 
   const handleCancel = () => {
     router.back();
   };
+
+  const handleDownloadReport = async () => {
+    if (!reportResult?.signedUrl) {
+      return;
+    }
+
+    setIsOpeningReport(true);
+
+    try {
+      await openCycleReport(reportResult.signedUrl);
+    } catch (error) {
+      setGenerateError(
+        error instanceof Error ? error.message : "Unable to open report.",
+      );
+    } finally {
+      setIsOpeningReport(false);
+    }
+  };
+
+  const handleShareReport = async () => {
+    if (!reportResult?.signedUrl) {
+      return;
+    }
+
+    setIsSharingReport(true);
+
+    try {
+      await shareCycleReport(
+        reportResult.signedUrl,
+        reportResult.reportTitle ?? "AquaPrana Cycle Report",
+      );
+    } catch (error) {
+      setGenerateError(
+        error instanceof Error ? error.message : "Unable to share report.",
+      );
+    } finally {
+      setIsSharingReport(false);
+    }
+  };
+
+  const heroTitle = reportResult
+    ? "Your cycle report is ready"
+    : isGenerating
+      ? "Generating your cycle report..."
+      : generateError
+        ? "Report generation failed"
+        : "Preparing your cycle report...";
+
+  const heroBody =
+    generateError ??
+    (reportResult
+      ? `${reportResult.reportTitle} generated successfully. Download or share the PDF below.`
+      : "Please wait while we synthesize your pond's performance data into a comprehensive document.");
 
   if (isLoading) {
     return (
@@ -163,6 +289,23 @@ export default function CycleReportScreen() {
         <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
         <View style={styles.loaderScreen}>
           <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError || !resolvedCycleId) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={["top"]}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <View style={styles.loaderScreen}>
+          <Text style={styles.heroTitle}>Unable to load report</Text>
+          <Text style={[styles.heroBody, { marginTop: 8 }]}>
+            {loadError ?? "No crop cycle was found for this report."}
+          </Text>
+          <Pressable onPress={() => router.back()} style={[styles.cancelButton, { marginTop: 20, width: 200 }]}>
+            <Text style={styles.cancelButtonText}>Go Back</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -178,9 +321,7 @@ export default function CycleReportScreen() {
             <Feather name="arrow-left" size={20} color={colors.text} />
           </Pressable>
 
-          <Text style={styles.headerTitle}>
-            Pond ID: {pond?.pondName || pond?.name || "Alpha-01"}
-          </Text>
+          <Text style={styles.headerTitle}>Pond ID: {pondName}</Text>
 
           <View style={styles.helpBadge}>
             <Feather name="help-circle" size={14} color={colors.primary} />
@@ -192,11 +333,8 @@ export default function CycleReportScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.heroSection}>
-            <Text style={styles.heroTitle}>Generating your cycle report...</Text>
-            <Text style={styles.heroBody}>
-              Please wait while we synthesize your pond's performance data into
-              a comprehensive document.
-            </Text>
+            <Text style={styles.heroTitle}>{heroTitle}</Text>
+            <Text style={styles.heroBody}>{heroBody}</Text>
           </View>
 
           <ProgressRing progress={progress} />
@@ -268,9 +406,53 @@ export default function CycleReportScreen() {
         </ScrollView>
 
         <View style={styles.footer}>
-          <Pressable onPress={handleCancel} style={styles.cancelButton}>
-            <Text style={styles.cancelButtonText}>Cancel Generation</Text>
-          </Pressable>
+          {reportResult ? (
+            <>
+              <Pressable
+                onPress={handleDownloadReport}
+                disabled={isOpeningReport}
+                style={styles.primaryButton}
+              >
+                <Feather name="download" size={16} color={colors.white} />
+                <Text style={styles.primaryButtonText}>
+                  {isOpeningReport ? "Opening..." : "Download Report"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleShareReport}
+                disabled={isSharingReport}
+                style={styles.shareButton}
+              >
+                <Feather name="share-2" size={16} color={colors.primary} />
+                <Text style={styles.shareButtonText}>
+                  {isSharingReport ? "Sharing..." : "Share Report"}
+                </Text>
+              </Pressable>
+            </>
+          ) : generateError ? (
+            <>
+              <Pressable
+                onPress={handleRetryGeneration}
+                style={styles.primaryButton}
+              >
+                <Feather name="refresh-cw" size={16} color={colors.white} />
+                <Text style={styles.primaryButtonText}>Retry Generation</Text>
+              </Pressable>
+              <Pressable onPress={handleCancel} style={styles.cancelButton}>
+                <Text style={styles.cancelButtonText}>Go Back</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              onPress={handleCancel}
+              disabled={isGenerating}
+              style={styles.cancelButton}
+            >
+              <Text style={styles.cancelButtonText}>
+                {isGenerating ? "Generating..." : "Cancel Generation"}
+              </Text>
+            </Pressable>
+          )}
         </View>
       </View>
     </SafeAreaView>
@@ -515,6 +697,37 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 18,
     backgroundColor: colors.background,
+    gap: 10,
+  },
+  primaryButton: {
+    height: 50,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  primaryButtonText: {
+    color: colors.white,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  shareButton: {
+    height: 50,
+    borderRadius: 12,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  shareButtonText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: "800",
   },
   cancelButton: {
     height: 50,

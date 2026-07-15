@@ -28,6 +28,29 @@ export type SupabasePondRecord = {
 export const mapSupabasePondName = (record: { name?: string | null }) =>
   record.name?.trim() ?? "";
 
+export const getPondSetupTimestamp = (pond: {
+  created_at?: string | null;
+  updated_at?: string | null;
+}) => {
+  for (const value of [pond.created_at, pond.updated_at]) {
+    const parsed = Date.parse(value ?? "");
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return 0;
+};
+
+export const sortPondsBySetupDateDesc = <
+  T extends { created_at?: string | null; updated_at?: string | null },
+>(
+  ponds: T[],
+) =>
+  [...ponds].sort(
+    (left, right) => getPondSetupTimestamp(right) - getPondSetupTimestamp(left),
+  );
+
 export async function savePond(
   pondName: string,
   area: string,
@@ -89,23 +112,27 @@ export async function getSupabasePonds() {
     .select(
       "id, name, area_acres, depth_ft, latitude, longitude, species, stocking_date, stocking_density, cycle_day, biomass, survival_rate, water_quality_status, last_log_time, archived, is_active, created_at, updated_at",
     )
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
 
   // Fall back to core columns if extended schema is not available yet.
   if (error) {
     const fallback = await supabase
       .from("ponds")
-      .select("id, name, area_acres, depth_ft, latitude, longitude")
-      .eq("user_id", user.id);
+      .select(
+        "id, name, area_acres, depth_ft, latitude, longitude, created_at, updated_at",
+      )
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
 
     return {
-      data: (fallback.data ?? []) as SupabasePondRecord[],
+      data: sortPondsBySetupDateDesc((fallback.data ?? []) as SupabasePondRecord[]),
       error: fallback.error,
     };
   }
 
   return {
-    data: (data ?? []) as SupabasePondRecord[],
+    data: sortPondsBySetupDateDesc((data ?? []) as SupabasePondRecord[]),
     error,
   };
 }

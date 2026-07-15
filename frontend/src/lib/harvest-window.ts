@@ -22,6 +22,37 @@ export const formatDisplayDate = (date: Date) => {
   return `${day} ${month} ${year}`;
 };
 
+export const formatIsoDateForDisplay = (isoDate: string) => {
+  const [year, month, day] = isoDate.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return isoDate;
+  }
+
+  return formatDisplayDate(new Date(year, month - 1, day));
+};
+
+export const formatHarvestWindowRange = (
+  start: string | null | undefined,
+  end: string | null | undefined,
+) => {
+  const startValue = start?.trim();
+  const endValue = end?.trim();
+
+  if (!startValue || !endValue) {
+    return "Harvest window pending";
+  }
+
+  const startDisplay = /^\d{4}-\d{2}-\d{2}$/.test(startValue)
+    ? formatIsoDateForDisplay(startValue)
+    : startValue;
+  const endDisplay = /^\d{4}-\d{2}-\d{2}$/.test(endValue)
+    ? formatIsoDateForDisplay(endValue)
+    : endValue;
+
+  return `${startDisplay} - ${endDisplay}`;
+};
+
 export const getSpeciesDuration = (
   species: string,
 ): SpeciesDuration | null => {

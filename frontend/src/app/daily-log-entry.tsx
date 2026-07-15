@@ -499,8 +499,11 @@ export default function DailyLogEntryScreen() {
       });
   
       Alert.alert("Success", "Daily log saved successfully.");
-  
-      router.replace("/home" as never);
+
+      router.replace({
+        pathname: "/daily-log",
+        params: { pondId },
+      } as never);
     } catch (e) {
       console.log(e);
 

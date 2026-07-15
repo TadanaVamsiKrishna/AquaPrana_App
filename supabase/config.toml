@@ -434,3 +434,9 @@ entrypoint = "./functions/aquagpt/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/aquagpt/*.html" ]
+
+[functions.generate-cycle-report]
+enabled = true
+verify_jwt = false
+import_map = "./functions/generate-cycle-report/deno.json"
+entrypoint = "./functions/generate-cycle-report/index.ts"

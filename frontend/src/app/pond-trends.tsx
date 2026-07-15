@@ -15,8 +15,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Circle, Line, Polyline, Rect } from "react-native-svg";
 import { PondBottomNav } from "../components/pond-bottom-nav";
 import { navigateToDailyLogEntry } from "../lib/daily-log-navigation";
-import { resolvePondId } from "../lib/pond-route";
-import { getPondById, type StoredPond } from "../services/local-ponds";
+import { navigateBackToHome, resolvePondId } from "../lib/pond-route";
+import {
+  getOverallWaterQuality,
+  getParameterStatus,
+} from "../lib/water-quality";
+import { getSupabasePondById } from "../services/pond";
 import {
   getTimeframeStart,
   getTrendPointsForPond,
@@ -111,6 +115,20 @@ const SERIES: ChartSeries[] = [
 
 const MIN_POINTS = 2;
 
+const PARAMETER_CHECKS: {
+  key: keyof Pick<
+    PondTrendPoint,
+    "dissolvedOxygen" | "ph" | "temperature" | "salinity" | "ammonia"
+  >;
+  statusKey: "do" | "ph" | "temperature" | "salinity" | "ammonia";
+}[] = [
+  { key: "dissolvedOxygen", statusKey: "do" },
+  { key: "ph", statusKey: "ph" },
+  { key: "temperature", statusKey: "temperature" },
+  { key: "salinity", statusKey: "salinity" },
+  { key: "ammonia", statusKey: "ammonia" },
+];
+
 const formatShortDate = (date: Date) =>
   date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
@@ -133,6 +151,92 @@ const formatLatestValue = (value: number | null, unit: string) => {
       : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 
   return unit ? `${rounded} ${unit}` : rounded;
+};
+
+const getTrendInsights = (points: PondTrendPoint[]) => {
+  if (points.length === 0) {
+    return {
+      statusLabel: "Pending Data",
+      statusBody: "Add logs to unlock trend analytics.",
+      stability: "—",
+      alerts: "0",
+      predictiveText: "Add water quality logs to unlock insights.",
+    };
+  }
+
+  const latest = points[points.length - 1];
+  const overallQuality = getOverallWaterQuality({
+    do: latest.dissolvedOxygen,
+    ph: latest.ph,
+    temperature: latest.temperature,
+    salinity: latest.salinity,
+    ammonia: latest.ammonia,
+    calcium: latest.calcium,
+    magnesium: latest.magnesium,
+    potassium: latest.potassium,
+  });
+
+  let inRangeCount = 0;
+  let totalChecks = 0;
+  let alertCount = 0;
+
+  for (const point of points) {
+    for (const check of PARAMETER_CHECKS) {
+      const value = point[check.key];
+      if (value === null) {
+        continue;
+      }
+
+      totalChecks += 1;
+      const status = getParameterStatus(check.statusKey, value);
+      if (status === "good") {
+        inRangeCount += 1;
+      } else if (status === "attention" || status === "critical") {
+        alertCount += 1;
+      }
+    }
+  }
+
+  const stability =
+    totalChecks > 0
+      ? `${Math.round((inRangeCount / totalChecks) * 100)}%`
+      : "—";
+
+  const statusLabel =
+    overallQuality === "Good"
+      ? "Optimal Conditions"
+      : overallQuality === "Attention"
+        ? "Needs Attention"
+        : overallQuality === "Critical"
+          ? "Critical Alerts"
+          : "Pending Data";
+
+  const statusBody =
+    overallQuality === "Good"
+      ? "All parameters within safety zones."
+      : overallQuality === "Attention"
+        ? "Some readings need attention."
+        : overallQuality === "Critical"
+          ? "Critical readings detected in recent logs."
+          : "Add logs to unlock trend analytics.";
+
+  const doStatus = getParameterStatus("do", latest.dissolvedOxygen);
+  const predictiveText =
+    doStatus === "good"
+      ? "DO levels stable based on latest readings."
+      : doStatus === "attention"
+        ? "DO levels are sub-optimal in the latest reading."
+        : doStatus === "critical"
+          ? "DO levels are critical in the latest reading."
+          : "Add dissolved oxygen readings to unlock insights.";
+
+  return {
+    statusLabel,
+    statusBody,
+    stability,
+    alerts: String(alertCount),
+    predictiveText,
+  };
 };
 
 function LineTrendChart({
@@ -329,10 +433,11 @@ export default function PondTrendsScreen() {
   const params = useLocalSearchParams<{ pondId: string }>();
   const pondId = resolvePondId(params.pondId);
 
-  const [pond, setPond] = useState<StoredPond | null>(null);
+  const [pondName, setPondName] = useState("Pond Trends");
   const [points, setPoints] = useState<PondTrendPoint[]>([]);
   const [timeframe, setTimeframe] = useState<Timeframe>("7D");
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     if (!pondId) {
@@ -340,14 +445,25 @@ export default function PondTrendsScreen() {
     }
 
     setIsLoading(true);
-    const [pondData, trendPoints] = await Promise.all([
-      getPondById(pondId),
-      getTrendPointsForPond(pondId, timeframe),
-    ]);
+    setLoadError(null);
 
-    setPond(pondData);
-    setPoints(trendPoints);
-    setIsLoading(false);
+    try {
+      const [pondData, trendPoints] = await Promise.all([
+        getSupabasePondById(pondId),
+        getTrendPointsForPond(pondId, timeframe),
+      ]);
+
+      setPondName(pondData?.name?.trim() || "Pond Trends");
+      setPoints(trendPoints);
+    } catch (error) {
+      console.log("[pond-trends] load error:", error);
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to load trend data.",
+      );
+      setPoints([]);
+    } finally {
+      setIsLoading(false);
+    }
   }, [pondId, timeframe]);
 
   useFocusEffect(
@@ -357,19 +473,7 @@ export default function PondTrendsScreen() {
   );
 
   const rangeLabel = useMemo(() => formatRangeLabel(timeframe), [timeframe]);
-  const hasAnyTrend = SERIES.some(
-    (series) =>
-      points.filter((point) => point[series.key] !== null).length >= MIN_POINTS,
-  );
-
-  const statusLabel =
-    pond?.waterQualityStatus === "Good" || pond?.waterQualityStatus === "Excellent"
-      ? "Optimal Conditions"
-      : pond?.waterQualityStatus === "Attention" || pond?.waterQualityStatus === "Fair"
-        ? "Needs Attention"
-        : pond?.waterQualityStatus === "Critical" || pond?.waterQualityStatus === "Poor"
-          ? "Critical Alerts"
-          : "Pending Data";
+  const insights = useMemo(() => getTrendInsights(points), [points]);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -377,10 +481,13 @@ export default function PondTrendsScreen() {
 
       <View style={styles.screen}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.iconButton}>
+          <Pressable
+            onPress={() => navigateBackToHome(router)}
+            style={styles.iconButton}
+          >
             <Feather name="arrow-left" size={22} color={colors.text} />
           </Pressable>
-          <Text style={styles.headerTitle}>{pond?.pondName ?? "Pond Trends"}</Text>
+          <Text style={styles.headerTitle}>{pondName}</Text>
           <Pressable style={styles.iconButton}>
             <Feather name="download" size={20} color={colors.text} />
           </Pressable>
@@ -392,20 +499,18 @@ export default function PondTrendsScreen() {
         >
           <View style={styles.statusCard}>
             <Text style={styles.statusEyebrow}>CURRENT STATUS</Text>
-            <Text style={styles.statusTitle}>{statusLabel}</Text>
+            <Text style={styles.statusTitle}>{insights.statusLabel}</Text>
             <Text style={styles.statusBody}>
-              {hasAnyTrend
-                ? "All parameters within safety zones."
-                : "Add logs to unlock trend analytics."}
+              {loadError ?? insights.statusBody}
             </Text>
 
             <View style={styles.badgeRow}>
               <View style={[styles.badge, styles.badgeGreen]}>
-                <Text style={styles.badgeValue}>98%</Text>
+                <Text style={styles.badgeValue}>{insights.stability}</Text>
                 <Text style={styles.badgeLabel}>Stability</Text>
               </View>
               <View style={[styles.badge, styles.badgeBlue]}>
-                <Text style={styles.badgeValue}>0</Text>
+                <Text style={styles.badgeValue}>{insights.alerts}</Text>
                 <Text style={styles.badgeLabel}>Alerts</Text>
               </View>
             </View>
@@ -478,9 +583,7 @@ export default function PondTrendsScreen() {
 
               <View style={styles.predictiveBanner}>
                 <Text style={styles.predictiveEyebrow}>PREDICTIVE ANALYTICS</Text>
-                <Text style={styles.predictiveText}>
-                  DO levels stable for next 48h
-                </Text>
+                <Text style={styles.predictiveText}>{insights.predictiveText}</Text>
               </View>
             </>
           )}

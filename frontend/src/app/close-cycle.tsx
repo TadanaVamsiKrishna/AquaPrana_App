@@ -20,17 +20,18 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PondBottomNav } from "../components/pond-bottom-nav";
-import { formatDisplayDate } from "../lib/harvest-window";
 import {
-  saveClosedCycle,
-  type CycleOutcome,
-} from "../services/local-cycle-history";
-import {
-  getPondById,
-  savePond,
-  savePondDraft,
-  type StoredPond,
-} from "../services/local-ponds";
+  closeCropCycle,
+  formatCycleFcr,
+  formatCycleSurvival,
+  getActiveCropCycleForPond,
+  type CropCycleRecord,
+} from "../services/cropCycle";
+import { getSupabasePondById } from "../services/pond";
+import { savePondDraft } from "../services/local-ponds";
+import { generateCycleReport } from "../services/reportService";
+
+type CycleOutcome = "Successful" | "Failed";
 
 const colors = {
   primary: "#0A84FF",
@@ -112,8 +113,12 @@ export default function CloseCycleScreen() {
   const router = useRouter();
   const { pondId } = useLocalSearchParams<{ pondId: string }>();
 
-  const [pond, setPond] = useState<StoredPond | null>(null);
+  const [activeCycle, setActiveCycle] = useState<CropCycleRecord | null>(null);
+  const [pondName, setPondName] = useState("My Pond");
+  const [pondArea, setPondArea] = useState("");
+  const [pondDepth, setPondDepth] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<CycleOutcome>("Successful");
   const [outcomePickerOpen, setOutcomePickerOpen] = useState(false);
   const [harvestDate, setHarvestDate] = useState(() => new Date());
@@ -129,9 +134,32 @@ export default function CloseCycleScreen() {
     }
 
     setIsLoading(true);
-    const pondData = await getPondById(pondId);
-    setPond(pondData);
-    setIsLoading(false);
+    setLoadError(null);
+
+    try {
+      const [pondData, cycle] = await Promise.all([
+        getSupabasePondById(pondId),
+        getActiveCropCycleForPond(pondId),
+      ]);
+
+      setPondName(pondData?.name?.trim() || "My Pond");
+      setPondArea(String(pondData?.area_acres ?? ""));
+      setPondDepth(String(pondData?.depth_ft ?? ""));
+      setActiveCycle(cycle);
+
+      if (!cycle) {
+        setLoadError("No active crop cycle found for this pond.");
+      }
+    } catch (error) {
+      console.log("[close-cycle] load error:", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load active cycle.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }, [pondId]);
 
   useFocusEffect(
@@ -140,21 +168,15 @@ export default function CloseCycleScreen() {
     }, [loadData]),
   );
 
-  const finalFcr = useMemo(() => {
-    const biomass = pond?.biomass ?? "";
-    if (!biomass || biomass === "—") {
-      return "1.28";
-    }
-    return "1.28";
-  }, [pond]);
+  const finalFcr = useMemo(
+    () => formatCycleFcr(activeCycle?.estimated_fcr),
+    [activeCycle],
+  );
 
-  const finalSurvival = useMemo(() => {
-    const rate = pond?.survivalRate?.trim();
-    if (!rate || rate === "—") {
-      return "92.4%";
-    }
-    return rate.endsWith("%") ? rate : `${rate}%`;
-  }, [pond]);
+  const finalSurvival = useMemo(
+    () => formatCycleSurvival(activeCycle?.survival_rate),
+    [activeCycle],
+  );
 
   const isFailed = outcome === "Failed";
 
@@ -195,8 +217,13 @@ export default function CloseCycleScreen() {
     (!isFailed || failureReason.trim().length > 0);
 
   const closeCycle = async (startNew: boolean) => {
-    if (!pond || !pondId || !isFormValid || isSubmitting) {
-      if (!isFormValid) {
+    if (!activeCycle || !pondId || !isFormValid || isSubmitting) {
+      if (!activeCycle) {
+        Alert.alert(
+          "No active cycle",
+          loadError ?? "There is no active crop cycle to close.",
+        );
+      } else if (!isFormValid) {
         Alert.alert(
           "Missing details",
           isFailed
@@ -210,61 +237,41 @@ export default function CloseCycleScreen() {
     setIsSubmitting(true);
 
     try {
-      await saveClosedCycle({
-        id: Date.now().toString(),
-        pondId,
-        pondName: pond.pondName || pond.name || "My Pond",
-        species: pond.species || "—",
-        stockingDate: pond.stockingDate || "—",
-        harvestDate: formatDisplayDate(harvestDate),
-        cycleLengthDays: pond.cycleDay || "—",
+      await closeCropCycle(activeCycle.id, {
         outcome,
-        harvestWeightKg: harvestWeight.trim(),
-        failureReason: isFailed ? failureReason.trim() : undefined,
-        finalFcr,
-        finalSurvival,
-        closedAt: new Date().toISOString(),
+        actualHarvestDate: harvestDate,
+        harvestWeightKg: Number(harvestWeight),
+        notes: isFailed ? failureReason.trim() : undefined,
       });
 
+      const closedCycleId = activeCycle.id;
+
       if (startNew) {
-        await savePond({
-          ...pond,
-          species: "",
-          stockingDate: "",
-          stockingDensity: "",
-          harvestWindowStart: "",
-          harvestWindowEnd: "",
-          cycleDay: "1",
-          biomass: "—",
-          survivalRate: "—",
-          waterQualityStatus: "Not logged",
-          lastLogTime: "—",
-          latestReadings: undefined,
-          archived: false,
-          isActive: false,
+        void generateCycleReport(closedCycleId).catch((error) => {
+          console.log("[close-cycle] report generation error:", error);
         });
 
         await savePondDraft({
-          id: pond.id,
-          pondName: pond.pondName || pond.name || "",
-          area: pond.area,
-          depth: pond.depth,
+          id: pondId,
+          pondName,
+          area: pondArea,
+          depth: pondDepth,
         });
 
         router.replace("/start-journey" as never);
         return;
       }
 
-            await savePond({
-              ...pond,
-              archived: true,
-              isActive: false,
-            });
-
       router.replace({
-        pathname: "/pond-cycles",
-        params: { pondId },
+        pathname: "/cycle-report",
+        params: { pondId, cycleId: closedCycleId },
       } as never);
+    } catch (error) {
+      console.log("[close-cycle] save error:", error);
+      Alert.alert(
+        "Unable to close cycle",
+        error instanceof Error ? error.message : "Please try again.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -276,6 +283,21 @@ export default function CloseCycleScreen() {
         <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
         <View style={styles.loaderScreen}>
           <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError && !activeCycle) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={["top"]}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <View style={styles.loaderScreen}>
+          <Text style={styles.errorTitle}>No Active Crop Cycle</Text>
+          <Text style={styles.errorBody}>{loadError}</Text>
+          <Pressable onPress={() => router.back()} style={styles.backLink}>
+            <Text style={styles.backLinkText}>Go Back</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -520,6 +542,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.background,
+    paddingHorizontal: 24,
+    gap: 8,
+  },
+  errorTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  errorBody: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+    fontWeight: "500",
+  },
+  backLink: {
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  backLinkText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: "800",
   },
   screen: { flex: 1 },
   header: {

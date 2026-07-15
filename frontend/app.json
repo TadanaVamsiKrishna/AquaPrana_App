@@ -10,7 +10,7 @@
     "ios": {
       "icon": "./assets/expo.icon"
     },
-      "android": {
+    "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -58,8 +58,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "22006b90-aaf6-451b-9519-2a802b36749a"
+        "projectId": "3a6ba197-7231-4b9e-938f-9dda80d26499"
       }
-    }
+    },
+    "owner": "tadanavamsi"
   }
 }

@@ -174,37 +174,52 @@ export default function CropDetailsScreen() {
       return;
     }
  
-    let harvestWindowStart = "";
-    let harvestWindowEnd = "";
+    let harvestWindowStartDate: Date | null = null;
+    let harvestWindowEndDate: Date | null = null;
 
     if (harvestDisplay.mode === "calculated") {
-      harvestWindowStart = harvestDisplay.earliest;
-      harvestWindowEnd = harvestDisplay.latest;
+      const harvestWindow = calculateHarvestWindow(stockingDate, species);
+      if (harvestWindow) {
+        harvestWindowStartDate = harvestWindow.earliest;
+        harvestWindowEndDate = harvestWindow.latest;
+      }
     } else if (
       harvestDisplay.mode === "manual" &&
       manualHarvestEarliest &&
       manualHarvestLatest
     ) {
-      harvestWindowStart = formatDisplayDate(manualHarvestEarliest);
-      harvestWindowEnd = formatDisplayDate(manualHarvestLatest);
+      harvestWindowStartDate = manualHarvestEarliest;
+      harvestWindowEndDate = manualHarvestLatest;
     } else {
       const harvestWindow = calculateHarvestWindow(stockingDate, species);
       if (harvestWindow) {
-        harvestWindowStart = formatDisplayDate(harvestWindow.earliest);
-        harvestWindowEnd = formatDisplayDate(harvestWindow.latest);
+        harvestWindowStartDate = harvestWindow.earliest;
+        harvestWindowEndDate = harvestWindow.latest;
       }
     }
 
-    console.log("Crop Cycle Pond ID:", pondId);
+    if (!harvestWindowStartDate || !harvestWindowEndDate) {
+      Alert.alert(
+        "Harvest window missing",
+        "Please ensure both harvest window dates are set before saving.",
+      );
+      return;
+    }
+
+    console.log("[crop-details] saving harvest window:", {
+      pondId,
+      harvest_window_start: harvestWindowStartDate.toISOString().split("T")[0],
+      harvest_window_end: harvestWindowEndDate.toISOString().split("T")[0],
+    });
+
     await createCropCycle(pondId, {
       category,
       species,
       stockingDensity: Number(stockingDensity),
       stockingDate,
       seedSupplier,
-
-
-    
+      harvestWindowStart: harvestWindowStartDate,
+      harvestWindowEnd: harvestWindowEndDate,
     });
  
     router.replace("/home" as never);

@@ -12,6 +12,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PondBottomNav } from "../components/pond-bottom-nav";
+import { navigateBackToHome } from "../lib/pond-route";
 import {
   getAmmoniaStatus,
   getDoStatus,
@@ -20,6 +21,7 @@ import {
   getTemperatureStatus,
 } from "../lib/water-quality";
 import {
+  getLogsForCycle,
   getLogsForPond,
   type DailyLogEntry,
 } from "../services/dailyLogs";
@@ -119,7 +121,10 @@ function LogHistoryCard({ log }: { log: DailyLogEntry }) {
 
 export default function PondLogsScreen() {
   const router = useRouter();
-  const { pondId } = useLocalSearchParams<{ pondId: string }>();
+  const { pondId, cycleId } = useLocalSearchParams<{
+    pondId: string;
+    cycleId?: string;
+  }>();
   const [pond, setPond] = useState<SupabasePondRecord | null>(null);
   const [logs, setLogs] = useState<DailyLogEntry[]>([]);
   const [page, setPage] = useState(1);
@@ -133,7 +138,7 @@ export default function PondLogsScreen() {
     setIsLoading(true);
     const [pondData, pondLogs] = await Promise.all([
       getSupabasePondById(pondId),
-      getLogsForPond(pondId),
+      cycleId ? getLogsForCycle(cycleId) : getLogsForPond(pondId),
     ]);
 
     const sortedLogs = pondLogs.sort(
@@ -145,7 +150,7 @@ export default function PondLogsScreen() {
     setPond(pondData);
     setLogs(sortedLogs);
     setIsLoading(false);
-  }, [pondId]);
+  }, [pondId, cycleId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -169,7 +174,10 @@ export default function PondLogsScreen() {
 
       <View style={styles.screen}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.iconButton}>
+          <Pressable
+            onPress={() => navigateBackToHome(router)}
+            style={styles.iconButton}
+          >
             <Feather name="arrow-left" size={22} color={colors.primaryDark} />
           </Pressable>
           <Text style={styles.headerTitle}>Logs History</Text>

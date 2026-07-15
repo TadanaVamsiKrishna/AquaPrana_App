@@ -1,5 +1,4 @@
 import { supabase } from "../lib/supabase";
-import { getLogsForPond, type DailyLogEntry } from "./local-daily-logs";
 
 export type PondTrendPoint = {
   id: string;
@@ -31,19 +30,6 @@ const toNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const fromLocalLog = (log: DailyLogEntry): PondTrendPoint => ({
-  id: `local-${log.id}`,
-  observedAt: log.observedAt,
-  dissolvedOxygen: toNumber(log.dissolvedOxygen),
-  ph: toNumber(log.ph),
-  temperature: toNumber(log.temperature),
-  salinity: toNumber(log.salinity),
-  ammonia: toNumber(log.ammonia),
-  calcium: toNumber(log.calcium),
-  magnesium: toNumber(log.magnesium),
-  potassium: toNumber(log.potassium),
-});
-
 const fromRemoteLog = (log: Record<string, unknown>): PondTrendPoint | null => {
   const observedAt =
     (typeof log.observed_at === "string" && log.observed_at) ||
@@ -57,7 +43,7 @@ const fromRemoteLog = (log: Record<string, unknown>): PondTrendPoint | null => {
   const id = typeof log.id === "string" ? log.id : `remote-${observedAt}`;
 
   return {
-    id: `remote-${id}`,
+    id,
     observedAt,
     dissolvedOxygen: toNumber(log.do_mgl ?? log.dissolved_oxygen ?? log.do),
     ph: toNumber(log.ph),
@@ -68,40 +54,6 @@ const fromRemoteLog = (log: Record<string, unknown>): PondTrendPoint | null => {
     magnesium: toNumber(log.magnesium_mgl ?? log.magnesium),
     potassium: toNumber(log.potassium_mgl ?? log.potassium),
   };
-};
-
-const mergeTrendPoints = (
-  remote: PondTrendPoint[],
-  local: PondTrendPoint[],
-): PondTrendPoint[] => {
-  const byKey = new Map<string, PondTrendPoint>();
-
-  for (const point of [...remote, ...local]) {
-    const key = `${new Date(point.observedAt).getTime()}-${point.dissolvedOxygen ?? ""}-${point.ph ?? ""}-${point.ammonia ?? ""}`;
-    const existing = byKey.get(key);
-
-    if (!existing) {
-      byKey.set(key, point);
-      continue;
-    }
-
-    byKey.set(key, {
-      ...existing,
-      dissolvedOxygen: existing.dissolvedOxygen ?? point.dissolvedOxygen,
-      ph: existing.ph ?? point.ph,
-      temperature: existing.temperature ?? point.temperature,
-      salinity: existing.salinity ?? point.salinity,
-      ammonia: existing.ammonia ?? point.ammonia,
-      calcium: existing.calcium ?? point.calcium,
-      magnesium: existing.magnesium ?? point.magnesium,
-      potassium: existing.potassium ?? point.potassium,
-    });
-  }
-
-  return Array.from(byKey.values()).sort(
-    (left, right) =>
-      new Date(left.observedAt).getTime() - new Date(right.observedAt).getTime(),
-  );
 };
 
 export const getTimeframeStart = (timeframe: TrendTimeframe, now = new Date()) => {
@@ -128,38 +80,26 @@ export const filterPointsByTimeframe = (
 export const fetchRemotePondLogs = async (
   pondId: string,
 ): Promise<PondTrendPoint[]> => {
-  try {
-    const { data, error } = await supabase
-      .from("pond_logs")
-      .select("*")
-      .eq("pond_id", pondId)
-      .order("observed_at", { ascending: true });
+  const { data, error } = await supabase
+    .from("pond_logs")
+    .select("*")
+    .eq("pond_id", pondId)
+    .order("observed_at", { ascending: true });
 
-    if (error || !data) {
-      return [];
-    }
+  console.log("[pond-logs] fetched trend logs:", data?.length ?? 0);
+  console.log("[pond-logs] fetch error:", error);
 
-    return data
-      .map((row) => fromRemoteLog(row as Record<string, unknown>))
-      .filter((point): point is PondTrendPoint => point !== null);
-  } catch {
-    return [];
-  }
+  if (error) throw error;
+
+  return (data ?? [])
+    .map((row) => fromRemoteLog(row as Record<string, unknown>))
+    .filter((point): point is PondTrendPoint => point !== null);
 };
 
 export const getTrendPointsForPond = async (
   pondId: string,
   timeframe: TrendTimeframe,
 ): Promise<PondTrendPoint[]> => {
-  const [remote, localLogs] = await Promise.all([
-    fetchRemotePondLogs(pondId),
-    getLogsForPond(pondId),
-  ]);
-
-  const merged = mergeTrendPoints(
-    remote,
-    localLogs.map(fromLocalLog),
-  );
-
-  return filterPointsByTimeframe(merged, timeframe);
+  const remote = await fetchRemotePondLogs(pondId);
+  return filterPointsByTimeframe(remote, timeframe);
 };

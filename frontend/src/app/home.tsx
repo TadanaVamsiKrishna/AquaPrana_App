@@ -13,22 +13,16 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BottomNav } from "../components/bottom-nav";
-import { getSpeciesDuration } from "../lib/harvest-window";
-import {
-  type OverallWaterQuality,
-} from "../lib/water-quality";
 import { getFarmerProfile, getGreeting } from "../services/local-profile";
-
-
-import type { StoredPond } from "../services/local-ponds";
-import { resolvePondName } from "../services/local-ponds";
-
-
 import {
-
-  getSupabasePonds,
-  mapSupabasePondName,
-} from "../services/pond";
+  fetchMyPondsDashboard,
+  getCycleStatusLabel,
+  getHarvestRangeLabel,
+  type MyPondDashboardItem,
+  type PondCycleStatus,
+} from "../services/pondsDashboardService";
+import { getPondSetupTimestamp } from "../services/pond";
+import { getSurvivalColorFromRate } from "../lib/cycle-metrics";
 
  
 
@@ -44,88 +38,45 @@ const colors = {
   softBlue: "#E8F3FF",
   shadow: "#0A4F9E",
   statusGreen: "#22C55E",
+  successSoft: "#DCFCE7",
   statusOrange: "#F59E0B",
   statusRed: "#EF4444",
   linkBlue: "#0056B3",
   metricIcon: "#9CA3AF",
   speciesBlue: "#D6EBFF",
   speciesText: "#0A6BD1",
+  statusNeutral: "#94A3B8",
+  statusNeutralSoft: "#F1F5F9",
 };
 
 type PondTab = "all" | "archived";
 
-function getHarvestRangeLabel(pond: StoredPond) {
-  const cycleDay = Number(pond.cycleDay);
-  const duration = getSpeciesDuration(pond.species);
-
-  if (!duration || !Number.isFinite(cycleDay)) {
-    return "Harvest window pending";
+function getCycleStatusStyles(status: PondCycleStatus) {
+  if (status === "active") {
+    return {
+      dot: colors.statusGreen,
+      badge: colors.successSoft,
+      text: colors.statusGreen,
+    };
   }
 
-  if (cycleDay >= duration.minDays && cycleDay <= duration.maxDays) {
-    return "Window open";
+  if (status === "closed") {
+    return {
+      dot: colors.statusRed,
+      badge: "#FEE2E2",
+      text: colors.statusRed,
+    };
   }
 
-  const minRemaining = Math.max(duration.minDays - cycleDay, 0);
-  const maxRemaining = Math.max(duration.maxDays - cycleDay, 0);
-
-  if (minRemaining === 0 && maxRemaining === 0) {
-    return "Window open";
-  }
-
-  return `Ready in ${minRemaining}-${maxRemaining} days`;
+  return {
+    dot: colors.statusNeutral,
+    badge: colors.statusNeutralSoft,
+    text: colors.muted,
+  };
 }
 
-function formatLastLogText(lastLogTime: string) {
-  if (!lastLogTime || lastLogTime === "—") {
-    return "No log today";
-  }
-
-  return lastLogTime;
-}
-
-function getWaterQualityLabel(status: string): OverallWaterQuality {
-  if (status === "Good" || status === "Excellent") {
-    return "Good";
-  }
-
-  if (status === "Fair" || status === "Attention") {
-    return "Attention";
-  }
-
-  if (status === "Poor" || status === "Critical") {
-    return "Critical";
-  }
-
-  return "Not logged";
-}
-
-function getWaterQualityDisplayText(quality: OverallWaterQuality) {
-  if (quality === "Good") {
-    return "Excellent";
-  }
-
-  if (quality === "Not logged") {
-    return "Not logged";
-  }
-
-  return quality;
-}
-
-function getStatusDotColor(quality: OverallWaterQuality) {
-  if (quality === "Good") {
-    return colors.statusGreen;
-  }
-
-  if (quality === "Attention") {
-    return colors.statusOrange;
-  }
-
-  if (quality === "Critical") {
-    return colors.statusRed;
-  }
-
-  return colors.muted;
+function getWaterLogStatusColor(status: MyPondDashboardItem["waterLogStatus"]) {
+  return status === "Logged Today" ? colors.statusGreen : colors.statusOrange;
 }
 
 function formatSpeciesLabel(species: string) {
@@ -216,16 +167,14 @@ function PondListCard({
   pond,
   onPress,
 }: {
-  pond: StoredPond;
+  pond: MyPondDashboardItem;
   onPress: () => void;
 }) {
-  const waterQuality = getWaterQualityLabel(pond.waterQualityStatus);
-  const statusDotColor = getStatusDotColor(waterQuality);
-  const waterLabel = getWaterQualityDisplayText(waterQuality);
-  const waterValueColor =
-    waterQuality === "Good"
-      ? colors.text
-      : getStatusDotColor(waterQuality);
+  const cycleStatusStyles = getCycleStatusStyles(pond.cycleStatus);
+  const waterValueColor = getWaterLogStatusColor(pond.waterLogStatus);
+  const speciesLabel = pond.species.trim() || "—";
+  const survivalColor = getSurvivalColorFromRate(pond.survivalRateNumeric);
+  const biomassColor = pond.abwStale ? colors.muted : colors.text;
 
   return (
     <Pressable
@@ -234,15 +183,30 @@ function PondListCard({
       accessibilityRole="button"
     >
       <View style={styles.pondCardHeader}>
-        <Text style={styles.pondName}>
-          {resolvePondName(pond)}
-        </Text>
-        <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
+        <Text style={styles.pondName}>{pond.pondName}</Text>
+        <View
+          style={[
+            styles.cycleStatusBadge,
+            { backgroundColor: cycleStatusStyles.badge },
+          ]}
+        >
+          <View
+            style={[
+              styles.cycleStatusDot,
+              { backgroundColor: cycleStatusStyles.dot },
+            ]}
+          />
+          <Text
+            style={[styles.cycleStatusText, { color: cycleStatusStyles.text }]}
+          >
+            {getCycleStatusLabel(pond.cycleStatus)}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.speciesBadge}>
         <Text style={styles.speciesBadgeText}>
-          {formatSpeciesLabel(pond.species)}
+          {formatSpeciesLabel(speciesLabel)}
         </Text>
       </View>
 
@@ -255,17 +219,21 @@ function PondListCard({
         <MetricCell
           materialIcon="scale-balance"
           label="BIOMASS"
-          value={formatBiomass(pond.biomass)}
+          value={formatBiomass(pond.biomass || "—")}
+          valueColor={pond.biomass && pond.biomass !== "—" ? biomassColor : undefined}
         />
         <MetricCell
           icon="heart"
           label="SURVIVAL"
-          value={formatSurvivalValue(pond.survivalRate)}
+          value={formatSurvivalValue(pond.survivalRate || "—")}
+          valueColor={
+            pond.survivalRateNumeric != null ? survivalColor : undefined
+          }
         />
         <MetricCell
           materialIcon="waves"
           label="WATER QLTY"
-          value={waterLabel}
+          value={pond.waterLogStatus}
           valueColor={waterValueColor}
         />
       </View>
@@ -274,7 +242,7 @@ function PondListCard({
         <View style={styles.lastLogRow}>
           <Feather name="rotate-ccw" size={13} color={colors.muted} />
           <Text style={styles.lastLogText}>
-            Last Log: {formatLastLogText(pond.lastLogTime)}
+            Last Log: {pond.lastLogTime}
           </Text>
         </View>
 
@@ -289,54 +257,30 @@ function PondListCard({
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [ponds, setPonds] = useState<StoredPond[]>([]);
+  const [ponds, setPonds] = useState<MyPondDashboardItem[]>([]);
   const [farmerName, setFarmerName] = useState("Farmer");
   const [activeTab, setActiveTab] = useState<PondTab>("all");
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
-  
+    setLoadError(null);
+
     try {
-      const [{ data: ponds }, profile] = await Promise.all([
-        getSupabasePonds(),
+      const [dashboardPonds, profile] = await Promise.all([
+        fetchMyPondsDashboard(),
         getFarmerProfile(),
       ]);
-  
-      const savedPonds: StoredPond[] =
-        (ponds ?? []).map((pond) => ({
-          id: pond.id,
-          pondName: mapSupabasePondName(pond),
-  
-          area: String(pond.area_acres ?? ""),
-          depth: String(pond.depth_ft ?? ""),
-  
-          species: "",
-          stockingDate: "",
-          stockingDensity: "",
-  
-          harvestWindowStart: "",
-          harvestWindowEnd: "",
-  
-          cycleDay: "1",
-  
-          biomass: "",
-  
-          survivalRate: "",
-  
-          waterQualityStatus: "Not logged",
-  
-          lastLogTime: "",
-  
-          archived: false,
-        })) ?? [];
-  
-      setPonds(savedPonds);
-  
+
+      setPonds(dashboardPonds);
       setFarmerName(profile?.name ?? "Farmer");
     } catch (err) {
-      console.log(err);
-
+      console.log("[home] load error:", err);
+      setLoadError(
+        err instanceof Error ? err.message : "Unable to load ponds dashboard.",
+      );
+      setPonds([]);
     } finally {
       setIsLoading(false);
     }
@@ -348,11 +292,15 @@ export default function HomeScreen() {
   );
 
   const visiblePonds = useMemo(() => {
-    return  ponds.filter((pond) =>
-      activeTab === "archived" ? pond.archived : !pond.archived,
-    );
-
-  
+    return ponds
+      .filter((pond) =>
+        activeTab === "archived" ? pond.archived : !pond.archived,
+      )
+      .sort(
+        (left, right) =>
+          getPondSetupTimestamp({ created_at: right.createdAt }) -
+          getPondSetupTimestamp({ created_at: left.createdAt }),
+      );
   }, [ponds, activeTab]);
 
   return (
@@ -473,6 +421,14 @@ export default function HomeScreen() {
           {isLoading ? (
             <View style={styles.loadingState}>
               <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+          ) : loadError ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIcon}>
+                <Feather name="alert-circle" size={28} color={colors.statusRed} />
+              </View>
+              <Text style={styles.emptyTitle}>Unable to load ponds</Text>
+              <Text style={styles.emptySubtitle}>{loadError}</Text>
             </View>
           ) : visiblePonds.length === 0 ? (
             <View style={styles.emptyState}>
@@ -771,6 +727,23 @@ const styles = StyleSheet.create({
     width: 9,
     height: 9,
     borderRadius: 5,
+  },
+  cycleStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  cycleStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  cycleStatusText: {
+    fontSize: 11,
+    fontWeight: "800",
   },
   speciesBadge: {
     alignSelf: "flex-start",

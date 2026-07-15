@@ -170,23 +170,23 @@ export default function PondSetupScreen() {
       depth: averageDepth,
     });
 
-    await saveLocalPond({
-      id: localPondId,
-      pondName: pondName.trim(),
-      name: pondName.trim(),
-      area,
-      depth: averageDepth,
-      species: "",
-      stockingDate: "",
-      stockingDensity: "",
-      harvestWindowStart: "",
-      harvestWindowEnd: "",
-      cycleDay: "1",
-      biomass: "—",
-      survivalRate: "—",
-      waterQualityStatus: "Not logged",
-      lastLogTime: "—",
-    });
+    // await saveLocalPond({
+    //   id: localPondId,
+    //   pondName: pondName.trim(),
+    //   name: pondName.trim(),
+    //   area,
+    //   depth: averageDepth,
+    //   species: "",
+    //   stockingDate: "",
+    //   stockingDensity: "",
+    //   harvestWindowStart: "",
+    //   harvestWindowEnd: "",
+    //   cycleDay: "1",
+    //   biomass: "—",
+    //   survivalRate: "—",
+    //   waterQualityStatus: "Not logged",
+    //   lastLogTime: "—",
+    // });
  
 
     const { data, error } = await savePond(
