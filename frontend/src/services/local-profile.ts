@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+﻿import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type FarmerProfile = {
   name: string;
@@ -27,16 +27,16 @@ export const getFarmerProfile = async (): Promise<FarmerProfile | null> => {
   }
 };
 
-export const getGreeting = () => {
+export const getGreetingKey = () => {
   const hour = new Date().getHours();
 
   if (hour < 12) {
-    return "Good morning";
+    return "greetings.morning";
   }
 
   if (hour < 17) {
-    return "Good afternoon";
+    return "greetings.afternoon";
   }
 
-  return "Good evening";
+  return "greetings.evening";
 };

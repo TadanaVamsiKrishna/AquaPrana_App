@@ -12,8 +12,9 @@ import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
 import { BottomNav } from "../components/bottom-nav";
-import { getFarmerProfile, getGreeting } from "../services/local-profile";
+import { getFarmerProfile, getGreetingKey } from "../services/local-profile";
 import {
   fetchMyPondsDashboard,
   getCycleStatusLabel,
@@ -257,6 +258,7 @@ function PondListCard({
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [ponds, setPonds] = useState<MyPondDashboardItem[]>([]);
   const [farmerName, setFarmerName] = useState("Farmer");
   const [activeTab, setActiveTab] = useState<PondTab>("all");
@@ -278,13 +280,13 @@ export default function HomeScreen() {
     } catch (err) {
       console.log("[home] load error:", err);
       setLoadError(
-        err instanceof Error ? err.message : "Unable to load ponds dashboard.",
+        err instanceof Error ? err.message : t("home.unableToLoad"),
       );
       setPonds([]);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
   useFocusEffect(
     useCallback(() => {
       loadData();
@@ -317,7 +319,7 @@ export default function HomeScreen() {
                 pressed && styles.pressed,
               ]}
               accessibilityRole="button"
-              accessibilityLabel="Open profile"
+              accessibilityLabel={t("profile.title")}
             >
               <View style={styles.brandLogo}>
                 <Text style={styles.brandLogoText}>🦐</Text>
@@ -325,7 +327,7 @@ export default function HomeScreen() {
               <View style={styles.brandCopy}>
                 <Text style={styles.brandName}>AQUAPRANA</Text>
                 <Text style={styles.brandGreeting}>
-                  {getGreeting()}, {farmerName}
+                  {t(getGreetingKey())}, {farmerName}
                 </Text>
               </View>
             </Pressable>
@@ -334,7 +336,7 @@ export default function HomeScreen() {
               onPress={() => router.push("/notifications" as never)}
               style={styles.notificationButton}
               accessibilityRole="button"
-              accessibilityLabel="Open notifications"
+              accessibilityLabel={t("common.details")}
             >
               <Feather name="bell" size={20} color={colors.white} />
               <View style={styles.notificationDot} />
@@ -344,15 +346,15 @@ export default function HomeScreen() {
           <View style={styles.weatherCard}>
             <Feather name="sun" size={18} color="#FBBF24" />
             <Text style={styles.weatherTemp}>28°C</Text>
-            <Text style={styles.weatherLabel}>PARTLY CLOUDY</Text>
+            <Text style={styles.weatherLabel}>{t("home.weather.partlyCloudy")}</Text>
           </View>
         </View>
 
         <View style={styles.contentHeader}>
           <View style={styles.titleBlock}>
-            <Text style={styles.pageTitle}>My Ponds</Text>
+            <Text style={styles.pageTitle}>{t("home.title")}</Text>
             <Text style={styles.pageSubtitle}>
-              Overview of all your ponds at a glance
+              {t("home.subtitle")}
             </Text>
           </View>
 
@@ -364,7 +366,7 @@ export default function HomeScreen() {
             ]}
             accessibilityRole="button"
           >
-            <Text style={styles.addPondButtonText}>+ Add Pond</Text>
+            <Text style={styles.addPondButtonText}>{t("home.addPond")}</Text>
           </Pressable>
         </View>
 
@@ -380,7 +382,7 @@ export default function HomeScreen() {
                 activeTab === "all" && styles.tabLabelActive,
               ]}
             >
-              All Ponds
+              {t("home.allPonds")}
             </Text>
             {activeTab === "all" ? <View style={styles.tabIndicator} /> : null}
           </Pressable>
@@ -396,7 +398,7 @@ export default function HomeScreen() {
                 activeTab === "archived" && styles.tabLabelActive,
               ]}
             >
-              Archived
+              {t("home.archived")}
             </Text>
             {activeTab === "archived" ? (
               <View style={styles.tabIndicator} />
@@ -406,7 +408,7 @@ export default function HomeScreen() {
 
         <View style={styles.filterRow}>
           <Pressable style={styles.filterDropdown} accessibilityRole="button">
-            <Text style={styles.filterDropdownText}>Recent Activity</Text>
+            <Text style={styles.filterDropdownText}>{t("home.recentActivity")}</Text>
             <Feather name="chevron-down" size={16} color={colors.muted} />
           </Pressable>
           <Pressable style={styles.filterIconButton} accessibilityRole="button">
@@ -427,7 +429,7 @@ export default function HomeScreen() {
               <View style={styles.emptyIcon}>
                 <Feather name="alert-circle" size={28} color={colors.statusRed} />
               </View>
-              <Text style={styles.emptyTitle}>Unable to load ponds</Text>
+              <Text style={styles.emptyTitle}>{t("home.unableToLoad")}</Text>
               <Text style={styles.emptySubtitle}>{loadError}</Text>
             </View>
           ) : visiblePonds.length === 0 ? (
@@ -437,13 +439,13 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.emptyTitle}>
                 {activeTab === "archived"
-                  ? "No archived ponds"
-                  : "No ponds yet"}
+                  ? t("home.noArchived")
+                  : t("home.noPonds")}
               </Text>
               <Text style={styles.emptySubtitle}>
                 {activeTab === "archived"
-                  ? "Archived ponds will appear here."
-                  : "Add your first pond to start tracking cycles and logs."}
+                  ? t("home.archivedHint")
+                  : t("home.noPondsHint")}
               </Text>
             </View>
           ) : (

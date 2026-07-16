@@ -9,42 +9,39 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+type ConversationTurn = {
+  role?: string;
+  text?: string;
+};
+
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: corsHeaders,
     });
   }
+
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SERVICE_ROLE_KEY")!
+    Deno.env.get("SERVICE_ROLE_KEY")!,
   );
 
   try {
-    const { question, pondId} = await req.json();
-    const { data: pond, error: pondError } = await supabase
-  .from("ponds")
-  .select("*")
-  .eq("id", pondId)
-  .single();
+    const body = await req.json();
+    const {
+      question,
+      pondId,
+      cycleId,
+      userId,
+      screen,
+      mode,
+      conversationHistory,
+      latestLogsSummary,
+      feedScheduleSummary,
+      waterQualitySummary,
+      inventorySummary,
+    } = body ?? {};
 
-console.log("Selected Pond:", pond);
-console.log("Pond Error:", pondError);
-if (pondError) {
-  return new Response(
-    JSON.stringify({
-      error: pondError.message,
-    }),
-    {
-      status: 400,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "application/json",
-      },
-    }
-  );
-}
     if (!question) {
       return new Response(
         JSON.stringify({
@@ -56,56 +53,178 @@ if (pondError) {
             ...corsHeaders,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
     }
-    const { data: latestLog, error: logError } = await supabase
-    .from("pond_logs")
-    .select("*")
-    .eq("pond_id", pondId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-  
-  console.log("Latest Log:", latestLog);
-  console.log("Log Error:", logError);
-  const pondContext = `
-Selected Pond Information
 
-Pond Name: ${pond?.name}
+    const isGeneric = mode === "generic" || !pondId;
 
-Area: ${pond?.area_acres} acres
+    const history = Array.isArray(conversationHistory)
+      ? (conversationHistory as ConversationTurn[])
+          .slice(-6)
+          .map((turn) => `${turn.role ?? "user"}: ${turn.text ?? ""}`)
+          .join("\n")
+      : "";
 
-Depth: ${pond?.depth_ft} ft
+    let systemPrompt = "";
+    let userContent = "";
 
-Latest Water Quality
+    if (isGeneric) {
+      systemPrompt = `
+You are AquaGPT, an AI shrimp/fish farming assistant inside AquaPrana.
 
-DO: ${latestLog?.do_mgl}
+Mode: Generic Assistant (General Aquaculture)
 
-pH: ${latestLog?.ph}
-
-Temperature: ${latestLog?.temp_c} °C
-
-Salinity: ${latestLog?.salinity_ppt} ppt
-
-Ammonia: ${latestLog?.ammonia_mgl} mg/L
-
-Calcium: ${latestLog?.calcium_mgl}
-
-Magnesium: ${latestLog?.magnesium_mgl}
-
-Potassium: ${latestLog?.potassium_mgl}
-
-Feed Quantity: ${latestLog?.feed_qty_kg} kg
-
-Mortality: ${latestLog?.mortality_count}
-
-Biomass: ${latestLog?.biomass_kg}
-
-Observed At:
-${latestLog?.observed_at}
+Rules:
+• Answer using general aquaculture knowledge only.
+• Do NOT ask for pond selection unless the farmer wants pond-specific advice.
+• Do NOT invent pond-specific readings, IDs, or farmer private data.
+• Keep answers under 150 words.
+• Use bullet points when helpful.
+• Explain recommendations in simple language for farmers.
 `;
 
+      userContent = `
+Application Context
+Mode: generic
+User ID: ${userId ?? "unavailable"}
+Current Screen: ${screen ?? "unavailable"}
+Pond ID: none
+Crop Cycle ID: none
+
+Recent Conversation:
+${history || "none"}
+
+Farmer Question:
+${question}
+
+Answer as a general aquaculture assistant. Do not use or invent pond-specific data.
+`;
+    } else {
+      const { data: pond, error: pondError } = await supabase
+        .from("ponds")
+        .select("*")
+        .eq("id", pondId)
+        .single();
+
+      if (pondError) {
+        return new Response(
+          JSON.stringify({
+            error: pondError.message,
+          }),
+          {
+            status: 400,
+            headers: {
+              ...corsHeaders,
+              "Content-Type": "application/json",
+            },
+          },
+        );
+      }
+
+      let cycle = null as Record<string, unknown> | null;
+      if (cycleId) {
+        const { data } = await supabase
+          .from("crop_cycles")
+          .select("*")
+          .eq("id", cycleId)
+          .maybeSingle();
+        cycle = data;
+      } else {
+        const { data } = await supabase
+          .from("crop_cycles")
+          .select("*")
+          .eq("pond_id", pondId)
+          .ilike("status", "active")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        cycle = data;
+      }
+
+      const { data: latestLog } = await supabase
+        .from("pond_logs")
+        .select("*")
+        .eq("pond_id", pondId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const pondContext = `
+Application Context
+Mode: pond
+User ID: ${userId ?? "unavailable"}
+Current Screen: ${screen ?? "unavailable"}
+Pond ID: ${pondId}
+Cycle ID: ${cycle?.id ?? cycleId ?? "unavailable"}
+
+Selected Pond Information
+Pond Name: ${pond?.name}
+Area: ${pond?.area_acres} acres
+Depth: ${pond?.depth_ft} ft
+
+Active Crop Cycle
+Species: ${cycle?.species ?? "unavailable"}
+Status: ${cycle?.status ?? "unavailable"}
+Biomass: ${cycle?.current_biomass_kg ?? "unavailable"} kg
+Survival: ${cycle?.survival_rate ?? "unavailable"}%
+FCR: ${cycle?.estimated_fcr ?? "unavailable"}
+ABW: ${cycle?.current_abw_g ?? "unavailable"} g
+
+Latest Water Quality (server)
+DO: ${latestLog?.do_mgl}
+pH: ${latestLog?.ph}
+Temperature: ${latestLog?.temp_c} °C
+Salinity: ${latestLog?.salinity_ppt} ppt
+Ammonia: ${latestLog?.ammonia_mgl} mg/L
+Calcium: ${latestLog?.calcium_mgl}
+Magnesium: ${latestLog?.magnesium_mgl}
+Potassium: ${latestLog?.potassium_mgl}
+Feed Quantity: ${latestLog?.feed_qty_kg} kg
+Mortality: ${latestLog?.mortality_count}
+Observed At: ${latestLog?.observed_at}
+
+Client Water Quality Summary:
+${waterQualitySummary ?? "unavailable"}
+
+Latest Pond Logs Summary:
+${latestLogsSummary ?? "unavailable"}
+
+Feed Schedule:
+${feedScheduleSummary ?? "unavailable"}
+
+Inventory Data:
+${inventorySummary ?? "not requested"}
+
+Recent Conversation:
+${history || "none"}
+`;
+
+      systemPrompt = `
+You are AquaGPT, an AI shrimp/fish farming assistant inside AquaPrana.
+
+You receive live application context for the pond the farmer is currently viewing.
+
+Rules:
+• Always analyze the provided pond/cycle/log data before answering.
+• Use the current pond context. Do not ask the farmer to select a pond if pond data is present.
+• Mention actual values from the context.
+• Never invent values. If missing, say unavailable.
+• Keep answers under 150 words.
+• Use bullet points when helpful.
+• Explain recommendations in simple language.
+`;
+
+      userContent = `
+${pondContext}
+
+Farmer Question:
+${question}
+
+Answer using the pond information above.
+If information is missing, clearly mention that.
+`;
+    }
 
     const apiKey = Deno.env.get("GROQ_API_KEY");
 
@@ -120,7 +239,7 @@ ${latestLog?.observed_at}
             ...corsHeaders,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
     }
 
@@ -134,69 +253,20 @@ ${latestLog?.observed_at}
         },
         body: JSON.stringify({
           model: "llama-3.1-8b-instant",
-
           messages: [
             {
               role: "system",
-              content: `
-              You are AquaGPT.
-              
-              You are an AI shrimp farming assistant.
-              
-              You will receive:
-              
-              1. Pond Information
-              
-              2. Latest Pond Log
-              
-              3. Farmer Question
-              
-              Rules:
-              
-              • Always analyze the pond data before answering.
-              
-              • Never ignore the pond data.
-              
-              • Mention actual values.
-              
-              Example:
-              
-              Current pH is 7.8 which is ideal.
-              
-              Current DO is 5.5 mg/L which is acceptable.
-              
-              Current ammonia is 0.8 mg/L which is high.
-              
-              • Never invent values.
-              
-              • If a value is missing, say it is unavailable.
-              
-              • Keep answers under 150 words.
-              
-              • Use bullet points whenever appropriate.
-              
-              • Explain recommendations in simple language.
-              `
+              content: systemPrompt,
             },
             {
               role: "user",
-              content: `
-            ${pondContext}
-            
-            Farmer Question:
-            
-            ${question}
-            
-            Answer only using the pond information above.
-            If information is missing, clearly mention that.
-            `,
+              content: userContent,
             },
           ],
-
           temperature: 0.3,
           max_tokens: 500,
         }),
-      }
+      },
     );
 
     const groqData = await groqResponse.json();
@@ -212,14 +282,14 @@ ${latestLog?.observed_at}
             ...corsHeaders,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
     }
 
     return new Response(
       JSON.stringify({
-        answer: groqData.choices?.[0]?.message?.content ??
-          "No response received.",
+        answer:
+          groqData.choices?.[0]?.message?.content ?? "No response received.",
       }),
       {
         status: 200,
@@ -227,7 +297,7 @@ ${latestLog?.observed_at}
           ...corsHeaders,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
   } catch (err) {
     return new Response(
@@ -240,7 +310,7 @@ ${latestLog?.observed_at}
           ...corsHeaders,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
   }
 });

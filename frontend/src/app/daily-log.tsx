@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useTranslation } from "react-i18next";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PondBottomNav } from "../components/pond-bottom-nav";
 import { navigateToDailyLogEntry } from "../lib/daily-log-navigation";
@@ -192,6 +193,7 @@ function VitalCard({
 
 export default function DailyLogScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { pondId: pondIdParam } = useLocalSearchParams<{ pondId: string }>();
   const pondId = resolvePondId(pondIdParam);
 
@@ -297,6 +299,7 @@ export default function DailyLogScreen() {
 
   const showDataSourceSelection = !dataSource;
   const showDashboardSections = !!dataSource;
+  const hasActiveCycle = !!cropCycle;
 
   const navigateWithPond = (pathname: string) => {
     router.push({
@@ -435,7 +438,7 @@ export default function DailyLogScreen() {
 
           {loadError ? (
             <View style={styles.infoCard}>
-              <Text style={styles.emptyInfoTitle}>Unable to load dashboard</Text>
+              <Text style={styles.emptyInfoTitle}>{t("home.unableToLoad")}</Text>
               <Text style={styles.emptyInfoBody}>{loadError}</Text>
             </View>
           ) : null}
@@ -445,29 +448,51 @@ export default function DailyLogScreen() {
               <View>
                 <Text style={styles.pondHeroName}>{pondName}</Text>
                 <View style={styles.activeRow}>
-                  <View style={styles.activeDot} />
+                  <View
+                    style={[
+                      styles.activeDot,
+                      !hasActiveCycle && styles.inactiveDot,
+                    ]}
+                  />
                   <Text style={styles.activeText}>
-                    {cropCycle?.status?.toUpperCase() ?? "ACTIVE"}
+                    {hasActiveCycle
+                      ? cropCycle?.status?.toUpperCase() ?? t("dashboard.active")
+                      : t("dashboard.noActiveCycleStatus")}
                   </Text>
                 </View>
               </View>
-              <View style={styles.cycleDayBlock}>
-                <Text style={styles.cycleDayLabel}>Cycle Day</Text>
-                <Text style={styles.cycleDayValue}>
-                  {cycleDay != null ? `Day ${cycleDay}` : "Day —"}
-                </Text>
-              </View>
+              {hasActiveCycle ? (
+                <View style={styles.cycleDayBlock}>
+                  <Text style={styles.cycleDayLabel}>{t("dashboard.cycleDay")}</Text>
+                  <Text style={styles.cycleDayValue}>
+                    {cycleDay != null ? `Day ${cycleDay}` : "Day —"}
+                  </Text>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => navigateWithPond("/crop-details")}
+                  style={({ pressed }) => [
+                    styles.createCycleButton,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Create crop cycle"
+                >
+                  <Feather name="plus" size={14} color={colors.primaryDark} />
+                  <Text style={styles.createCycleButtonText}>{t("dashboard.createCycle")}</Text>
+                </Pressable>
+              )}
             </View>
 
             <View style={styles.pondHeroBottom}>
               <Text style={styles.speciesText}>
-                Species: {formatSpeciesLine(cropCycle)}
+                {t("dashboard.species", { species: formatSpeciesLine(cropCycle) })}
               </Text>
-              {!cropCycle ? (
-                <Text style={styles.harvestValue}>No Active Crop Cycle</Text>
+              {!hasActiveCycle ? (
+                <Text style={styles.harvestValue}>{t("dashboard.noActiveCropCycle")}</Text>
               ) : null}
               <View style={styles.harvestBlock}>
-                <Text style={styles.harvestLabel}>Harvest Window</Text>
+                <Text style={styles.harvestLabel}>{t("dashboard.harvestWindow")}</Text>
                 <Text style={styles.harvestValue}>
                   {getHarvestWindowLabel(cropCycle)}
                 </Text>
@@ -487,29 +512,24 @@ export default function DailyLogScreen() {
 
           {cropCycle?.id && feedScheduleError && !hasFeedSetup ? (
             <View style={styles.infoCard}>
-              <Text style={styles.infoCardTitle}>Feed Recommendation</Text>
-              <Text style={styles.emptyInfoTitle}>No Feeding Schedule</Text>
+              <Text style={styles.infoCardTitle}>{t("dashboard.feedRecommendation")}</Text>
+              <Text style={styles.emptyInfoTitle}>{t("dashboard.noFeedingSchedule")}</Text>
               <Text style={styles.emptyInfoBody}>{feedScheduleError}</Text>
             </View>
           ) : null}
 
           {cropCycle?.id && !hasFeedSetup && !feedScheduleError ? (
-            <View style={[styles.setupCard, styles.feedCard]}>
+            <View style={[styles.setupCard, styles.feedSetupCard]}>
               <View style={[styles.setupIcon, styles.feedIcon]}>
                 <Feather name="coffee" size={18} color={colors.primaryDark} />
               </View>
-              <Text style={styles.setupTitle}>Feed Management Required</Text>
-              <Text style={styles.setupBody}>
-                Configure your feeding schedules and feed types to optimize growth,
-                minimize waste, and track nutrition efficiency across your cycle.
-              </Text>
+              <Text style={styles.setupTitle}>{t("dashboard.feedManagementRequired")}</Text>
+              <Text style={styles.setupBody}>{t("dashboard.feedManagementBody")}</Text>
               <Pressable
                 onPress={() => navigateWithPond("/feed-management")}
                 style={[styles.setupButton, styles.feedButton]}
               >
-                <Text style={styles.feedButtonText}>
-                  Explore Feed Management →
-                </Text>
+                <Text style={styles.feedButtonText}>{t("dashboard.exploreFeedManagement")}</Text>
               </Pressable>
             </View>
           ) : null}
@@ -517,24 +537,24 @@ export default function DailyLogScreen() {
           {cropCycle?.id && hasFeedSetup && feedSchedule ? (
             <View style={styles.feedCard}>
               <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Feed Recommendation</Text>
+                <Text style={styles.sectionTitle}>{t("dashboard.feedRecommendation")}</Text>
                 <Pressable
                   onPress={() => navigateWithPond("/feed-management")}
                   style={styles.feedScheduleLink}
                 >
-                  <Text style={styles.sectionLink}>View Schedule</Text>
+                  <Text style={styles.sectionLink}>{t("common.viewSchedule")}</Text>
                   <Feather name="chevron-right" size={14} color={colors.primary} />
                 </Pressable>
               </View>
 
               <View style={styles.feedHeroRow}>
                 <View style={styles.feedHeroCopy}>
-                  <Text style={styles.feedHeroLabel}>RECOMMENDED FEED</Text>
+                  <Text style={styles.feedHeroLabel}>{t("dashboard.recommendedFeed")}</Text>
                   <View style={styles.feedHeroValueRow}>
                     <Text style={styles.feedHeroValue}>
                       {feedSchedule.recommendedDailyKg}
                     </Text>
-                    <Text style={styles.feedHeroUnit}>kg/day</Text>
+                    <Text style={styles.feedHeroUnit}>{t("dashboard.kgPerDay")}</Text>
                   </View>
                 </View>
                 <View style={styles.feedHeroIcon}>
@@ -546,13 +566,13 @@ export default function DailyLogScreen() {
 
               <View style={styles.feedMetricsRow}>
                 <View style={styles.feedMetricBlock}>
-                  <Text style={styles.feedMetricLabel}>FEEDS PER DAY</Text>
+                  <Text style={styles.feedMetricLabel}>{t("dashboard.feedsPerDay")}</Text>
                   <Text style={styles.feedMetricValue}>
-                    {feedSchedule.feedsPerDay} Times
+                    {t("dashboard.times", { count: feedSchedule.feedsPerDay })}
                   </Text>
                 </View>
                 <View style={styles.feedMetricBlock}>
-                  <Text style={styles.feedMetricLabel}>PER FEED QUANTITY</Text>
+                  <Text style={styles.feedMetricLabel}>{t("dashboard.perFeedQuantity")}</Text>
                   <Text style={styles.feedMetricValue}>
                     {feedSchedule.perFeedQty} kg
                   </Text>
@@ -560,7 +580,7 @@ export default function DailyLogScreen() {
               </View>
 
               <View style={styles.feedTimesSection}>
-                <Text style={styles.feedMetricLabel}>FEED TIMES</Text>
+                <Text style={styles.feedMetricLabel}>{t("dashboard.feedTimes")}</Text>
                 <View style={styles.feedTimesRow}>
                   {feedSchedule.feedTimes.map((time) => {
                     const isNext = time === feedSchedule.nextFeedRaw;
@@ -591,7 +611,7 @@ export default function DailyLogScreen() {
                 <View style={styles.nextFeedBannerLeft}>
                   <Feather name="clock" size={14} color={colors.primary} />
                   <Text style={styles.nextFeedBannerText}>
-                    Next Feed at {feedSchedule.nextFeedTime}
+                    {t("dashboard.nextFeedAt", { time: feedSchedule.nextFeedTime })}
                   </Text>
                 </View>
                 <View style={styles.nextFeedBadge}>
@@ -608,16 +628,13 @@ export default function DailyLogScreen() {
               <View style={styles.setupIcon}>
                 <Feather name="dollar-sign" size={18} color={colors.primary} />
               </View>
-              <Text style={styles.setupTitle}>Expense Setup Required</Text>
-              <Text style={styles.setupBody}>
-                Configure prices for this crop cycle to track running costs, cost
-                per kg, and expense breakdown.
-              </Text>
+              <Text style={styles.setupTitle}>{t("dashboard.expenseSetupRequired")}</Text>
+              <Text style={styles.setupBody}>{t("dashboard.expenseSetupBody")}</Text>
               <Pressable
                 onPress={() => navigateWithPond("/expense-setup")}
                 style={styles.setupButton}
               >
-                <Text style={styles.setupButtonText}>Setup Expenses →</Text>
+                <Text style={styles.setupButtonText}>{t("common.setupExpenses")}</Text>
               </Pressable>
             </View>
           ) : null}
@@ -633,7 +650,7 @@ export default function DailyLogScreen() {
                     <Feather name="dollar-sign" size={18} color={colors.primary} />
                   </View>
                   <View style={styles.runningCostCopy}>
-                    <Text style={styles.runningCostLabel}>Running Cost</Text>
+                    <Text style={styles.runningCostLabel}>{t("dashboard.runningCost")}</Text>
                     <Text style={styles.runningCostValue}>
                       ₹ {(cycleExpenses?.total_cost ?? 0).toLocaleString("en-IN")}
                     </Text>
@@ -652,10 +669,12 @@ export default function DailyLogScreen() {
               <Pressable onPress={() => navigateWithPond("/expense-details")}>
                 <View style={styles.runningCostMetaRow}>
                   <Text style={styles.runningCostMeta}>
-                    Cost/kg:{" "}
-                    {cycleExpenses?.cost_per_kg != null
-                      ? `₹ ${cycleExpenses.cost_per_kg.toFixed(2)}`
-                      : "—"}
+                    {t("dashboard.costPerKg", {
+                      value:
+                        cycleExpenses?.cost_per_kg != null
+                          ? `₹ ${cycleExpenses.cost_per_kg.toFixed(2)}`
+                          : "—",
+                    })}
                   </Text>
                   <Text style={styles.runningCostMeta}>
                     {formatExpenseUpdatedAt(cycleExpenses?.computed_at)}
@@ -667,35 +686,35 @@ export default function DailyLogScreen() {
 
           {showDataSourceSelection ? (
             <>
-              <Text style={styles.sectionEyebrow}>DATA SOURCE SELECTION</Text>
+              <Text style={styles.sectionEyebrow}>{t("dashboard.dataSourceSelection")}</Text>
               <View style={styles.sourceRow}>
                 <View style={styles.sourceCard}>
                   <Feather name="radio" size={22} color={colors.primary} />
-                  <Text style={styles.sourceTitle}>Import from IoT</Text>
+                  <Text style={styles.sourceTitle}>{t("dashboard.importFromIot")}</Text>
                   <Pressable onPress={handleSelectIot} style={styles.sourceButton}>
-                    <Text style={styles.sourceButtonText}>Connect</Text>
+                    <Text style={styles.sourceButtonText}>{t("common.connect")}</Text>
                   </Pressable>
                 </View>
 
                 <Pressable onPress={handleSelectManual} style={styles.sourceCard}>
                   <Feather name="edit-3" size={22} color={colors.primary} />
-                  <Text style={styles.sourceTitle}>Manual Entry</Text>
+                  <Text style={styles.sourceTitle}>{t("common.manualEntry")}</Text>
                 </Pressable>
               </View>
             </>
           ) : null}
 
-          {showDashboardSections && hasLogs ? (
+          {showDashboardSections && hasLogs && hasActiveCycle ? (
             <>
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.sectionTitle}>Water Vitals</Text>
+                <Text style={styles.sectionTitle}>{t("dashboard.waterVitals")}</Text>
                   <Pressable onPress={() => navigateWithPond("/pond-trends")}>
-                    <Text style={styles.sectionLink}>View Live Trend</Text>
+                    <Text style={styles.sectionLink}>{t("dashboard.viewLiveTrend")}</Text>
                   </Pressable>
                 </View>
                 <Text style={styles.lastUpdatedText}>
-                  Last Updated: {lastUpdatedLabel}
+                  {t("dashboard.lastUpdated", { value: lastUpdatedLabel })}
                 </Text>
 
                 <ScrollView
@@ -717,7 +736,7 @@ export default function DailyLogScreen() {
               </View>
 
               <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>Growth & Biomass</Text>
+                <Text style={styles.sectionTitle}>{t("dashboard.growthBiomass")}</Text>
                 <View style={styles.growthGrid}>
                   <View style={styles.growthItem}>
                     <Text style={styles.growthLabel}>Total Biomass</Text>
@@ -774,7 +793,7 @@ export default function DailyLogScreen() {
               <View style={styles.logProgressCard}>
                 <Pressable onPress={handleLogToday} style={styles.logTodayButton}>
                   <Feather name="plus" size={16} color={colors.white} />
-                  <Text style={styles.logTodayButtonText}>Log Today&apos;s Data</Text>
+                  <Text style={styles.logTodayButtonText}>{t("dashboard.logTodayData")}</Text>
                 </Pressable>
                 <View style={styles.logProgressMeta}>
                   <Text style={styles.logProgressLast}>
@@ -797,35 +816,31 @@ export default function DailyLogScreen() {
           ) : !hasLogs ? (
             <>
               <View style={styles.infoCard}>
-                <Text style={styles.infoCardTitle}>Water Vitals</Text>
-                <Text style={styles.emptyInfoTitle}>No Pond Log</Text>
-                <Text style={styles.emptyInfoBody}>
-                  Log Required. Record your first daily water parameter check.
-                </Text>
+                <Text style={styles.infoCardTitle}>{t("dashboard.waterVitals")}</Text>
+                <Text style={styles.emptyInfoTitle}>{t("dashboard.noPondLog")}</Text>
+                <Text style={styles.emptyInfoBody}>{t("dashboard.logRequired")}</Text>
               </View>
 
               <View style={styles.infoCard}>
-                <Text style={styles.infoCardTitle}>Growth & Biomass</Text>
+                <Text style={styles.infoCardTitle}>{t("dashboard.growthBiomass")}</Text>
                 <View style={styles.placeholderImage}>
                   <Feather name="image" size={28} color={colors.muted} />
                 </View>
-                <Text style={styles.emptyInfoTitle}>No Pond Log</Text>
-                <Text style={styles.emptyInfoBody}>
-                  Wait for your first sampling to see growth trends.
-                </Text>
+                <Text style={styles.emptyInfoTitle}>{t("dashboard.noPondLog")}</Text>
+                <Text style={styles.emptyInfoBody}>{t("dashboard.firstSamplingHint")}</Text>
               </View>
             </>
           ) : null}
         </ScrollView>
 
-        {showDashboardSections ? (
+        {showDashboardSections && hasActiveCycle ? (
           <Pressable
             onPress={handleLogToday}
             style={styles.fab}
             accessibilityRole="button"
           >
             <Feather name="edit-3" size={16} color={colors.white} />
-            <Text style={styles.fabText}>Log Today&apos;s...</Text>
+            <Text style={styles.fabText}>{t("dashboard.logTodayShort")}</Text>
           </Pressable>
         ) : null}
 
@@ -985,6 +1000,9 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: colors.success,
   },
+  inactiveDot: {
+    backgroundColor: "rgba(255,255,255,0.45)",
+  },
   activeText: {
     color: "rgba(255,255,255,0.9)",
     fontSize: 12,
@@ -1024,6 +1042,21 @@ const styles = StyleSheet.create({
   harvestValue: {
     color: colors.white,
     fontSize: 14,
+    fontWeight: "800",
+  },
+  createCycleButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.white,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignSelf: "flex-start",
+  },
+  createCycleButtonText: {
+    color: colors.primaryDark,
+    fontSize: 12,
     fontWeight: "800",
   },
   progressTrack: {
@@ -1085,7 +1118,7 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
-  feedCard: {
+  feedSetupCard: {
     backgroundColor: colors.feedBlue,
     borderColor: "#D6E9FF",
   },

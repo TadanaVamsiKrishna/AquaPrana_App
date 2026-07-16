@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -18,6 +19,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   pickRecordImage,
+  pickRecordImages,
 } from "../lib/record-images";
 import {
   getParameterStatus,
@@ -107,6 +109,16 @@ const sanitizeDecimalInput = (value: string) => {
 };
 
 const sanitizeIntegerInput = (value: string) => value.replace(/[^0-9]/g, "");
+
+const MAX_CHECK_TRAY_PHOTOS = 5;
+
+type CheckTrayPhoto = {
+  id: string;
+  uri: string;
+};
+
+const createCheckTrayPhotoId = (uri: string) =>
+  `${uri}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const formKeyMap: Record<WaterParameterKey, keyof TouchedWaterFields> = {
   do: "dissolvedOxygen",
@@ -311,7 +323,8 @@ export default function DailyLogEntryScreen() {
   const [photoLoadingKey, setPhotoLoadingKey] = useState<
     keyof TouchedWaterFields | "checkTray" | null
   >(null);
-  const [checkTrayPhoto, setCheckTrayPhoto] = useState<string | null>(null);
+  const [checkTrayPhotos, setCheckTrayPhotos] = useState<CheckTrayPhoto[]>([]);
+  const [previewPhotoUri, setPreviewPhotoUri] = useState<string | null>(null);
   const isPickingPhotoRef = useRef(false);
 
 
@@ -354,6 +367,9 @@ export default function DailyLogEntryScreen() {
       });
     
       setObservationTime(getObservationTime());
+      setCheckTrayPhotos([]);
+      setPreviewPhotoUri(null);
+      setParameterPhotos({});
     
     } catch (err) {
       console.log(err);
@@ -390,9 +406,12 @@ export default function DailyLogEntryScreen() {
 
   useFocusEffect(
     useCallback(() => {
-  
-      loadPond();
-    }, [ loadPond]),
+      if (isPickingPhotoRef.current) {
+        return;
+      }
+
+      void loadPond();
+    }, [loadPond]),
   );
 
   const updateForm = (key: keyof FormState, value: string) => {
@@ -433,14 +452,73 @@ export default function DailyLogEntryScreen() {
   };
 
   const handleCheckTrayPhoto = async () => {
+    const remainingSlots = MAX_CHECK_TRAY_PHOTOS - checkTrayPhotos.length;
+
+    if (remainingSlots <= 0) {
+      Alert.alert(
+        "Photo limit reached",
+        `You can upload up to ${MAX_CHECK_TRAY_PHOTOS} check tray photos per daily log.`,
+      );
+      return;
+    }
+
     isPickingPhotoRef.current = true;
     setPhotoLoadingKey("checkTray");
 
     try {
-      const picked = await pickRecordImage();
-      if (picked?.uri) {
-        setCheckTrayPhoto(picked.uri);
+      const uris = await pickRecordImages(remainingSlots);
+      if (!uris?.length) {
+        return;
       }
+
+      const nextUris = uris.slice(0, remainingSlots);
+      setCheckTrayPhotos((current) => [
+        ...current,
+        ...nextUris.map((uri) => ({
+          id: createCheckTrayPhotoId(uri),
+          uri,
+        })),
+      ]);
+    } catch (error) {
+      Alert.alert(
+        "Photo error",
+        error instanceof Error
+          ? error.message
+          : "Unable to open camera or gallery.",
+      );
+    } finally {
+      setPhotoLoadingKey(null);
+      isPickingPhotoRef.current = false;
+    }
+  };
+
+  const handleRemoveCheckTrayPhoto = (id: string) => {
+    setCheckTrayPhotos((current) => current.filter((photo) => photo.id !== id));
+    setPreviewPhotoUri((current) => {
+      const removed = checkTrayPhotos.find((photo) => photo.id === id);
+      return removed && current === removed.uri ? null : current;
+    });
+  };
+
+  const handleReplaceCheckTrayPhoto = async (id: string) => {
+    isPickingPhotoRef.current = true;
+    setPhotoLoadingKey("checkTray");
+
+    try {
+      const uris = await pickRecordImages(1);
+      const nextUri = uris?.[0];
+      if (!nextUri) {
+        return;
+      }
+
+      setCheckTrayPhotos((current) =>
+        current.map((photo) =>
+          photo.id === id
+            ? { id: createCheckTrayPhotoId(nextUri), uri: nextUri }
+            : photo,
+        ),
+      );
+      setPreviewPhotoUri(null);
     } catch (error) {
       Alert.alert(
         "Photo error",
@@ -684,35 +762,101 @@ export default function DailyLogEntryScreen() {
                 <View style={styles.photoHeaderCopy}>
                   <Text style={styles.photoTitle}>CHECK TRAY PHOTO</Text>
                   <Text style={styles.photoSubtitle}>
-                    Upload a check tray image to evaluate feed intake.
+                    Upload up to {MAX_CHECK_TRAY_PHOTOS} check tray images to
+                    evaluate feed intake.
                   </Text>
                 </View>
               </View>
 
-              <Pressable
-                onPress={() => void handleCheckTrayPhoto()}
-                disabled={photoLoadingKey === "checkTray"}
-                style={({ pressed }) => [
-                  styles.photoUpload,
-                  pressed && styles.pressed,
-                ]}
-                accessibilityRole="button"
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.checkTrayGallery}
               >
-                {photoLoadingKey === "checkTray" ? (
-                  <ActivityIndicator color={colors.primary} />
-                ) : checkTrayPhoto ? (
-                  <Image
-                    source={{ uri: checkTrayPhoto }}
-                    style={styles.checkTrayPreview}
-                    contentFit="cover"
-                  />
-                ) : (
-                  <Feather name="image" size={22} color={colors.primary} />
-                )}
-              </Pressable>
+                {checkTrayPhotos.map((photo) => (
+                  <View key={photo.id} style={styles.checkTrayThumbWrap}>
+                    <Pressable
+                      onPress={() => setPreviewPhotoUri(photo.uri)}
+                      onLongPress={() =>
+                        void handleReplaceCheckTrayPhoto(photo.id)
+                      }
+                      style={styles.checkTrayThumb}
+                      accessibilityRole="button"
+                      accessibilityLabel="Preview check tray photo"
+                    >
+                      <Image
+                        source={{ uri: photo.uri }}
+                        style={styles.checkTrayPreview}
+                        contentFit="cover"
+                      />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleRemoveCheckTrayPhoto(photo.id)}
+                      style={styles.checkTrayRemoveButton}
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove check tray photo"
+                      hitSlop={8}
+                    >
+                      <Feather name="x" size={12} color={colors.white} />
+                    </Pressable>
+                  </View>
+                ))}
+
+                {checkTrayPhotos.length < MAX_CHECK_TRAY_PHOTOS ? (
+                  <Pressable
+                    onPress={() => void handleCheckTrayPhoto()}
+                    disabled={photoLoadingKey === "checkTray"}
+                    style={({ pressed }) => [
+                      styles.photoUpload,
+                      styles.checkTrayAddButton,
+                      pressed && styles.pressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add check tray photo"
+                  >
+                    {photoLoadingKey === "checkTray" ? (
+                      <ActivityIndicator color={colors.primary} />
+                    ) : (
+                      <Feather name="plus" size={24} color={colors.primary} />
+                    )}
+                  </Pressable>
+                ) : null}
+              </ScrollView>
+
+              {checkTrayPhotos.length > 0 ? (
+                <Text style={styles.checkTrayHint}>
+                  {checkTrayPhotos.length}/{MAX_CHECK_TRAY_PHOTOS} photos · Tap to
+                  preview · Long-press to replace
+                </Text>
+              ) : null}
             </View>
           </ScrollView>
         </View>
+
+        <Modal
+          visible={!!previewPhotoUri}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPreviewPhotoUri(null)}
+        >
+          <View style={styles.previewModalBackdrop}>
+            <Pressable
+              onPress={() => setPreviewPhotoUri(null)}
+              style={styles.previewModalClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close preview"
+            >
+              <Feather name="x" size={22} color={colors.white} />
+            </Pressable>
+            {previewPhotoUri ? (
+              <Image
+                source={{ uri: previewPhotoUri }}
+                style={styles.previewModalImage}
+                contentFit="contain"
+              />
+            ) : null}
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -887,6 +1031,73 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 12,
   },
+  checkTrayGallery: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 2,
+  },
+  checkTrayThumbWrap: {
+    width: 72,
+    height: 72,
+    position: "relative",
+  },
+  checkTrayThumb: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.softBlue,
+  },
+  checkTrayRemoveButton: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.danger,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  checkTrayAddButton: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderStyle: "dashed",
+  },
+  checkTrayHint: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  previewModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+  previewModalClose: {
+    position: "absolute",
+    top: 48,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2,
+  },
+  previewModalImage: {
+    width: "100%",
+    height: "80%",
+    borderRadius: 12,
+  },
   managementRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -967,8 +1178,8 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   photoUpload: {
-    width: 56,
-    height: 56,
+    width: 72,
+    height: 72,
     borderRadius: 12,
     backgroundColor: colors.softBlue,
     alignItems: "center",

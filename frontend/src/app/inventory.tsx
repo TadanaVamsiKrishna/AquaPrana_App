@@ -16,6 +16,7 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
 import { BottomNav } from "../components/bottom-nav";
 
 interface InventoryItem {
@@ -166,6 +167,7 @@ function InventoryCard({
 
 export default function InventoryScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -206,9 +208,9 @@ export default function InventoryScreen() {
     try {
       await restockInventoryItem(id);
       await loadItems();
-      Alert.alert("Success", "Inventory restocked.");
+      Alert.alert(t("common.success"), t("inventory.restocked"));
     } catch (error) {
-      Alert.alert("Error", "Unable to restock item.");
+      Alert.alert(t("common.error"), t("inventory.restockFailed"));
       console.log(error);
     }
   };
@@ -225,11 +227,11 @@ export default function InventoryScreen() {
               pressed && styles.buttonPressed,
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Go back"
+            accessibilityLabel={t("common.back")}
           >
             <Feather name="arrow-left" size={22} color={colors.text} />
           </Pressable>
-          <Text style={styles.topBarTitle}>Inventory</Text>
+          <Text style={styles.topBarTitle}>{t("inventory.title")}</Text>
           <View style={styles.iconButton} />
         </View>
 
@@ -239,8 +241,8 @@ export default function InventoryScreen() {
         >
           <View style={styles.heroCard}>
             <View style={styles.heroCopy}>
-              <Text style={styles.heroTitle}>Inventory</Text>
-              <Text style={styles.heroSubtitle}>Real-time stock monitoring</Text>
+              <Text style={styles.heroTitle}>{t("inventory.title")}</Text>
+              <Text style={styles.heroSubtitle}>{t("inventory.subtitle")}</Text>
             </View>
 
             <Pressable
@@ -251,7 +253,7 @@ export default function InventoryScreen() {
               ]}
               accessibilityRole="button"
             >
-              <Text style={styles.addButtonText}>+ Add</Text>
+              <Text style={styles.addButtonText}>{t("inventory.add")}</Text>
             </Pressable>
           </View>
 
@@ -260,7 +262,7 @@ export default function InventoryScreen() {
               <View style={styles.summaryIconWrap}>
                 <Feather name="package" size={16} color={colors.primary} />
               </View>
-              <Text style={styles.summaryLabel}>Total Items</Text>
+              <Text style={styles.summaryLabel}>{t("inventory.totalItems")}</Text>
               <Text style={styles.summaryValue}>{formatCount(totalItems)}</Text>
             </View>
 
@@ -268,7 +270,7 @@ export default function InventoryScreen() {
               <View style={[styles.summaryIconWrap, styles.summaryIconDanger]}>
                 <Feather name="alert-triangle" size={16} color={colors.danger} />
               </View>
-              <Text style={styles.summaryLabel}>Low Stock Count</Text>
+              <Text style={styles.summaryLabel}>{t("inventory.lowStockCount")}</Text>
               <Text style={[styles.summaryValue, styles.summaryValueDanger]}>
                 {lowStockItems.length}
               </Text>
@@ -289,9 +291,7 @@ export default function InventoryScreen() {
                       size={16}
                       color={colors.danger}
                     />
-                    <Text style={styles.urgentSectionTitle}>
-                      Urgent Attention
-                    </Text>
+                    <Text style={styles.urgentSectionTitle}>{t("inventory.urgentAttention")}</Text>
                   </View>
 
                   <View style={styles.urgentList}>
@@ -308,13 +308,13 @@ export default function InventoryScreen() {
 
               <View style={styles.section}>
                 <View style={styles.sectionHeaderSpaced}>
-                  <Text style={styles.sectionTitle}>Current Inventory</Text>
+                  <Text style={styles.sectionTitle}>{t("inventory.currentInventory")}</Text>
                   <Pressable
                     onPress={() =>
-                      Alert.alert("Filter", "Inventory filters coming soon.")
+                      Alert.alert(t("inventory.filterSoonTitle"), t("inventory.filterSoonMessage"))
                     }
                     accessibilityRole="button"
-                    accessibilityLabel="Filter inventory"
+                    accessibilityLabel={t("inventory.openFilter")}
                   >
                     <Feather name="filter" size={18} color={colors.muted} />
                   </Pressable>
@@ -325,9 +325,9 @@ export default function InventoryScreen() {
                     <View style={styles.emptyIcon}>
                       <Feather name="package" size={26} color={colors.primary} />
                     </View>
-                    <Text style={styles.emptyTitle}>No inventory yet</Text>
+                    <Text style={styles.emptyTitle}>{t("inventory.noInventory")}</Text>
                     <Text style={styles.emptySubtitle}>
-                      Tap + Add to record feed, treatments, and other stock.
+                      {t("inventory.noInventoryHint")}
                     </Text>
                   </View>
                 ) : (

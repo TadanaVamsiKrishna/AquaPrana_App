@@ -1,6 +1,7 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+﻿import { Pressable, StyleSheet, Text, View } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
+import { useTranslation } from "react-i18next";
 
 const colors = {
   primary: "#0A84FF",
@@ -12,17 +13,12 @@ const colors = {
 
 export type PondNavTab = "dashboard" | "logs" | "trends" | "cycles";
 
-const tabs: {
-  id: PondNavTab;
-  label: string;
-  icon: keyof typeof Feather.glyphMap;
-  route: string;
-}[] = [
-  { id: "dashboard", label: "Dashboard", icon: "grid", route: "/daily-log" },
-  { id: "logs", label: "Logs", icon: "file-text", route: "/pond-logs" },
-  { id: "trends", label: "Trends", icon: "trending-up", route: "/pond-trends" },
-  { id: "cycles", label: "Cycles", icon: "refresh-cw", route: "/pond-cycles" },
-];
+const tabs = [
+  { id: "dashboard", labelKey: "bottomNav.dashboard", icon: "grid", route: "/daily-log" },
+  { id: "logs", labelKey: "bottomNav.logs", icon: "file-text", route: "/pond-logs" },
+  { id: "trends", labelKey: "bottomNav.trends", icon: "trending-up", route: "/pond-trends" },
+  { id: "cycles", labelKey: "bottomNav.cycles", icon: "refresh-cw", route: "/pond-cycles" },
+] as const;
 
 type PondBottomNavProps = {
   pondId: string;
@@ -30,12 +26,14 @@ type PondBottomNavProps = {
 };
 
 export function PondBottomNav({ pondId, activeTab }: PondBottomNavProps) {
+  const { t } = useTranslation();
   const router = useRouter();
 
   return (
     <View style={styles.tabBar}>
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab;
+        const label = t(tab.labelKey);
 
         return (
           <Pressable
@@ -45,15 +43,12 @@ export function PondBottomNav({ pondId, activeTab }: PondBottomNavProps) {
                 return;
               }
 
-              router.replace({
-                pathname: tab.route,
-                params: { pondId },
-              } as never);
+              router.replace({ pathname: tab.route, params: { pondId } } as never);
             }}
             style={styles.tabItem}
             accessibilityRole="button"
             accessibilityState={{ selected: isActive }}
-            accessibilityLabel={tab.label}
+            accessibilityLabel={label}
           >
             <View style={[styles.iconWrap, isActive && styles.iconWrapActive]}>
               <Feather
@@ -63,7 +58,7 @@ export function PondBottomNav({ pondId, activeTab }: PondBottomNavProps) {
               />
             </View>
             <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
-              {tab.label}
+              {label}
             </Text>
           </Pressable>
         );
@@ -95,16 +90,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconWrapActive: {
-    backgroundColor: colors.softBlue,
-  },
+  iconWrapActive: { backgroundColor: colors.softBlue },
   tabLabel: {
     color: colors.muted,
     fontSize: 10,
     lineHeight: 13,
     fontWeight: "700",
   },
-  tabLabelActive: {
-    color: colors.primary,
-  },
+  tabLabelActive: { color: colors.primary },
 });

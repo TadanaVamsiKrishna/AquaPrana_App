@@ -271,7 +271,7 @@ export async function fetchDashboardData(pondId: string): Promise<DashboardData>
   const [pondRecord, cropCycle, latestLog, todayLogCount, logTotals] =
     await Promise.all([
       getSupabasePondById(pondId).catch(() => null),
-      getLatestCropCycleForPond(pondId),
+      getActiveCropCycleForPond(pondId),
       getLatestPondLogForPond(pondId),
       getTodayLogCountForPond(pondId),
       getPondLogTotalsForPond(pondId),

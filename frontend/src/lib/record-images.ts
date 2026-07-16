@@ -60,7 +60,9 @@ export const pickImageFromCamera = async (): Promise<string[] | null> => {
   return result.assets.map((asset) => asset.uri);
 };
 
-export const pickImagesFromGallery = async (): Promise<string[] | null> => {
+export const pickImagesFromGallery = async (
+  selectionLimit = 0,
+): Promise<string[] | null> => {
   const hasPermission = await requestMediaLibraryPermission();
   if (!hasPermission) {
     return null;
@@ -68,7 +70,8 @@ export const pickImagesFromGallery = async (): Promise<string[] | null> => {
 
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ["images"],
-    allowsMultipleSelection: true,
+    allowsMultipleSelection: selectionLimit !== 1,
+    selectionLimit: selectionLimit > 0 ? selectionLimit : 0,
     quality: 0.8,
   });
 
@@ -77,6 +80,40 @@ export const pickImagesFromGallery = async (): Promise<string[] | null> => {
   }
 
   return result.assets.map((asset) => asset.uri);
+};
+
+export const pickRecordImages = async (
+  remainingSlots = 5,
+): Promise<string[] | null> => {
+  if (remainingSlots <= 0) {
+    return null;
+  }
+
+  if (Platform.OS === "web") {
+    return pickImagesFromGallery(remainingSlots);
+  }
+
+  return new Promise((resolve) => {
+    Alert.alert("Add photo", "Choose how you want to add the image.", [
+      {
+        text: "Camera",
+        onPress: () => {
+          void pickImageFromCamera()
+            .then(resolve)
+            .catch(() => resolve(null));
+        },
+      },
+      {
+        text: "Gallery",
+        onPress: () => {
+          void pickImagesFromGallery(remainingSlots)
+            .then(resolve)
+            .catch(() => resolve(null));
+        },
+      },
+      { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+    ]);
+  });
 };
 
 export const pickSingleImage = async (
