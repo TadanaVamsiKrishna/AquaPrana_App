@@ -116,6 +116,32 @@ export const pickRecordImages = async (
   });
 };
 
+export const pickMultipleImages = async (
+  selectionLimit = 5,
+): Promise<PickedImage[] | null> => {
+  const hasPermission = await requestMediaLibraryPermission();
+  if (!hasPermission) {
+    return null;
+  }
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ["images"],
+    allowsMultipleSelection: true,
+    selectionLimit: selectionLimit > 0 ? selectionLimit : 0,
+    quality: 0.8,
+  });
+
+  if (result.canceled || !result.assets.length) {
+    return null;
+  }
+
+  return result.assets.map((asset, index) => ({
+    uri: asset.uri,
+    fileName: asset.fileName ?? `image-${Date.now()}-${index}.jpg`,
+    mimeType: asset.mimeType ?? "image/jpeg",
+  }));
+};
+
 export const pickSingleImage = async (
   source: "camera" | "gallery",
 ): Promise<PickedImage | null> => {

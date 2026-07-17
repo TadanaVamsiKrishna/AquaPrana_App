@@ -141,10 +141,26 @@ export default function ProfileScreen() {
   };
 
   const menuItems = [
-    { icon: "credit-card" as const, label: t("profile.mySubscription") },
-    { icon: "gift" as const, label: t("profile.referEarn") },
-    { icon: "edit-3" as const, label: t("profile.editProfile") },
-    { icon: "info" as const, label: t("profile.aboutUs") },
+    {
+      icon: "credit-card" as const,
+      label: t("profile.mySubscription"),
+      onPress: () => handleComingSoon(t("profile.mySubscription")),
+    },
+    {
+      icon: "gift" as const,
+      label: t("profile.referEarn"),
+      onPress: () => handleComingSoon(t("profile.referEarn")),
+    },
+    {
+      icon: "edit-3" as const,
+      label: t("profile.editProfile"),
+      onPress: () => router.push("/edit-profile" as never),
+    },
+    {
+      icon: "info" as const,
+      label: t("profile.aboutUs"),
+      onPress: () => handleComingSoon(t("profile.aboutUs")),
+    },
   ];
 
   const userName = profile?.name?.trim() || t("profile.farmerFallback");
@@ -197,7 +213,7 @@ export default function ProfileScreen() {
                     key={item.label}
                     icon={item.icon}
                     label={item.label}
-                    onPress={() => handleComingSoon(item.label)}
+                    onPress={item.onPress}
                   />
                 ))}
 

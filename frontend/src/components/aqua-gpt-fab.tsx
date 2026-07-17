@@ -19,6 +19,7 @@ const HIDDEN_PATHS = new Set([
   "/edit-inventory",
   "/aqua-gpt",
   "/profile",
+  "/edit-profile",
   "/notifications",
   "/phone-login",
   "/verify-otp",

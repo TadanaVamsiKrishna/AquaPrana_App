@@ -27,7 +27,30 @@ export async function getCurrentUserProfile(): Promise<{
     .eq("id", user.id)
     .maybeSingle();
 
-  return { profile: data, error: error ? new Error(error.message) : null };
+  if (error) {
+    return { profile: null, error: new Error(error.message) };
+  }
+
+  if (!data) {
+    return {
+      profile: {
+        name: "",
+        state: "",
+        district: "",
+        language: "English",
+        phone: user.phone ?? "",
+      },
+      error: null,
+    };
+  }
+
+  return {
+    profile: {
+      ...data,
+      phone: data.phone || user.phone || "",
+    },
+    error: null,
+  };
 }
 
 export async function farmerExistsForPhone(phone: string): Promise<{
@@ -62,12 +85,69 @@ export async function saveProfile(
     data: { user },
   } = await supabase.auth.getUser();
 
+  if (!user?.id) {
+    return {
+      data: null,
+      error: new Error("You must be signed in to update your profile."),
+    };
+  }
+
   return await supabase.from("users").upsert({
-    id: user?.id,
-    phone: user?.phone,
+    id: user.id,
+    phone: user.phone,
     name,
     state,
     district,
     language,
   });
+}
+
+export async function updateCurrentUserProfile(input: {
+  name: string;
+  state: string;
+  district: string;
+  language: string;
+}): Promise<{ error: Error | null }> {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user?.id) {
+    return {
+      error: userError ?? new Error("You must be signed in to update your profile."),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("users")
+    .update({
+      name: input.name,
+      state: input.state,
+      district: input.district,
+      language: input.language,
+    })
+    .eq("id", user.id)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    return { error: new Error(error.message) };
+  }
+
+  if (!data) {
+    // Row may not exist yet for some accounts — fall back to upsert.
+    const upsertResult = await saveProfile(
+      input.name,
+      input.state,
+      input.district,
+      input.language,
+    );
+
+    if (upsertResult.error) {
+      return { error: new Error(upsertResult.error.message) };
+    }
+  }
+
+  return { error: null };
 }

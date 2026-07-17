@@ -49,6 +49,12 @@
           "photosPermission": "Allow AquaPrana to access your photos to upload aquaculture records.",
           "cameraPermission": "Allow AquaPrana to access your camera to capture aquaculture records."
         }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow AquaPrana to record voice notes for AquaGPT."
+        }
       ]
     ],
     "experiments": {

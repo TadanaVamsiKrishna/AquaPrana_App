@@ -176,3 +176,21 @@ export async function askAquaGPT(
 
   return data.answer as string;
 }
+
+export async function transcribeAquaGptAudio(filePath: string) {
+  const { data, error } = await supabase.functions.invoke("aquagpt-transcribe", {
+    body: { filePath },
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  if (data?.error) {
+    throw new Error(
+      typeof data.error === "string" ? data.error : "Unable to transcribe audio.",
+    );
+  }
+
+  return (data?.transcript as string | undefined)?.trim() ?? "";
+}
