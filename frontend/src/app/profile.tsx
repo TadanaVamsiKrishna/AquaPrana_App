@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -23,15 +22,9 @@ import {
   setAppLanguage,
 } from "../i18n";
 import { logout } from "../services/auth";
-import {
-  clearFarmerProfile,
-  getFarmerProfile,
-  type FarmerProfile,
-} from "../services/local-profile";
-import {
-  getCurrentUserProfile,
-  softDeleteCurrentUser,
-} from "../services/profile";
+import { getFarmerProfile, type FarmerProfile } from "../services/local-profile";
+import { permanentlyDeleteCurrentAccount } from "../services/account-deletion";
+import { getCurrentUserProfile } from "../services/profile";
 
 const colors = {
   primary: "#0A84FF",
@@ -101,6 +94,8 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<ProfileState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [languageOpen, setLanguageOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   const loadProfile = useCallback(async () => {
     setIsLoading(true);
@@ -132,40 +127,31 @@ export default function ProfileScreen() {
   };
 
   const handleDeleteAccount = () => {
-    const confirmMessage = t("profile.deleteAccountConfirm");
+    if (isDeletingAccount) {
+      return;
+    }
+    setDeleteModalOpen(true);
+  };
 
-    const runDelete = async () => {
-      const { error } = await softDeleteCurrentUser(profile?.phone);
+  const handleConfirmDeleteAccount = async () => {
+    if (isDeletingAccount) {
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    try {
+      const { error } = await permanentlyDeleteCurrentAccount();
       if (error) {
         Alert.alert(t("common.error"), error.message);
         return;
       }
 
-      await clearFarmerProfile();
-      await logout();
+      setDeleteModalOpen(false);
+      Alert.alert(t("common.success"), t("profile.accountDeletedSuccess"));
       router.replace("/phone-login" as never);
-    };
-
-    if (Platform.OS === "web") {
-      const confirmed =
-        typeof window !== "undefined" &&
-        window.confirm(`${t("profile.deleteAccountTitle")}\n\n${confirmMessage}`);
-      if (confirmed) {
-        void runDelete();
-      }
-      return;
+    } finally {
+      setIsDeletingAccount(false);
     }
-
-    Alert.alert(t("profile.deleteAccountTitle"), confirmMessage, [
-      { text: t("common.cancel"), style: "cancel" },
-      {
-        text: t("profile.deleteAccount"),
-        style: "destructive",
-        onPress: () => {
-          void runDelete();
-        },
-      },
-    ]);
   };
 
   const handleComingSoon = (title: string) => {
@@ -327,6 +313,70 @@ export default function ProfileScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      <Modal
+        visible={deleteModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isDeletingAccount) {
+            setDeleteModalOpen(false);
+          }
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.deleteModalCard}>
+            <Text style={styles.modalTitle}>{t("profile.deleteAccountTitle")}</Text>
+            <Text style={styles.deleteModalBody}>
+              {t("profile.deleteAccountConfirm")}
+            </Text>
+
+            {isDeletingAccount ? (
+              <View style={styles.deleteLoadingRow}>
+                <ActivityIndicator color={colors.red} />
+                <Text style={styles.deleteLoadingText}>{t("common.loading")}</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.deleteActions}>
+              <Pressable
+                onPress={() => setDeleteModalOpen(false)}
+                disabled={isDeletingAccount}
+                style={({ pressed }) => [
+                  styles.deleteBackButton,
+                  isDeletingAccount && styles.deleteButtonDisabled,
+                  pressed && !isDeletingAccount && styles.pressed,
+                ]}
+                accessibilityRole="button"
+              >
+                <Text style={styles.deleteBackButtonText}>
+                  {t("profile.deleteAccountBack")}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => void handleConfirmDeleteAccount()}
+                disabled={isDeletingAccount}
+                style={({ pressed }) => [
+                  styles.deleteConfirmButton,
+                  isDeletingAccount && styles.deleteButtonDisabled,
+                  pressed && !isDeletingAccount && styles.pressed,
+                ]}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: isDeletingAccount }}
+              >
+                {isDeletingAccount ? (
+                  <ActivityIndicator color={colors.white} />
+                ) : (
+                  <Text style={styles.deleteConfirmButtonText}>
+                    {t("profile.deleteAccountConfirmButton")}
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -413,6 +463,64 @@ const styles = StyleSheet.create({
   },
   modalCard: { backgroundColor: colors.white, borderRadius: 18, padding: 16, gap: 8 },
   modalTitle: { color: colors.text, fontSize: 16, fontWeight: "800", marginBottom: 4 },
+  deleteModalCard: {
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    padding: 18,
+    gap: 14,
+  },
+  deleteModalBody: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "500",
+  },
+  deleteLoadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  deleteLoadingText: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  deleteActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+  deleteBackButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.white,
+  },
+  deleteBackButtonText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  deleteConfirmButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.red,
+  },
+  deleteConfirmButtonText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  deleteButtonDisabled: {
+    opacity: 0.55,
+  },
   modalOption: {
     minHeight: 48,
     borderRadius: 12,

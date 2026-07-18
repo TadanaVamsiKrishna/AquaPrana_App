@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -15,12 +14,10 @@ import { verifyOTP } from "../services/auth";
 import {
   farmerExistsForPhone,
   getCurrentUserProfile,
-  restoreSoftDeletedAccountIfNeeded,
 } from "../services/profile";
 import { saveFarmerProfile } from "../services/local-profile";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useTranslation } from "react-i18next";
 
 const colors = {
   primaryBlue: "#0A84FF",
@@ -35,7 +32,6 @@ const colors = {
 
 export default function VerifyOtpScreen() {
   const router = useRouter();
-  const { t } = useTranslation();
   const { phone } = useLocalSearchParams<{
     phone: string;
   }>();
@@ -76,25 +72,6 @@ export default function VerifyOtpScreen() {
 
       if (error) {
         alert(error.message);
-        return;
-      }
-
-      // Soft-delete restore only. On failure/skip, existing OTP flow continues as-is.
-      const restoreResult = await restoreSoftDeletedAccountIfNeeded(
-        phone as string,
-      );
-      if (restoreResult.restored && restoreResult.profile) {
-        await saveFarmerProfile({
-          name: restoreResult.profile.name,
-          state: restoreResult.profile.state ?? "",
-          district: restoreResult.profile.district ?? "",
-          language: restoreResult.profile.language ?? "",
-        });
-        Alert.alert(
-          t("profile.accountRestoredTitle"),
-          t("profile.accountRestoredMessage"),
-        );
-        router.replace("/home" as never);
         return;
       }
 
