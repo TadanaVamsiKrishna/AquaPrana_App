@@ -11,7 +11,8 @@
     "connect": "Connect",
     "manualEntry": "Manual Entry",
     "viewSchedule": "View Schedule",
-    "setupExpenses": "Setup Expenses →"
+    "setupExpenses": "Setup Expenses →",
+    "cancel": "Cancel"
   },
   "language": {
     "title": "Language",
@@ -41,6 +42,10 @@
     "aboutUs": "About Us",
     "logout": "Logout",
     "deleteAccount": "Delete account",
+    "deleteAccountTitle": "Delete Account",
+    "deleteAccountConfirm": "Are you sure you want to delete your account? Your account will be deactivated, but your data will be preserved and restored if you register again with the same phone number.",
+    "accountRestoredTitle": "Welcome back!",
+    "accountRestoredMessage": "Your previous account has been restored successfully.",
     "farmerFallback": "Farmer",
     "phoneFallback": "+91 - 0000000000",
     "appVersion": "App version: 1.0.0",

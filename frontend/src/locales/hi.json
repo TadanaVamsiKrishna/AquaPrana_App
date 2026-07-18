@@ -11,7 +11,8 @@
     "connect": "कनेक्ट",
     "manualEntry": "मैन्युअल एंट्री",
     "viewSchedule": "शेड्यूल देखें",
-    "setupExpenses": "खर्च सेट करें →"
+    "setupExpenses": "खर्च सेट करें →",
+    "cancel": "रद्द करें"
   },
   "language": {
     "title": "भाषा",
@@ -41,6 +42,10 @@
     "aboutUs": "हमारे बारे में",
     "logout": "लॉगआउट",
     "deleteAccount": "खाता हटाएँ",
+    "deleteAccountTitle": "खाता हटाएँ",
+    "deleteAccountConfirm": "क्या आप वाकई अपना खाता हटाना चाहते हैं? आपका खाता निष्क्रिय हो जाएगा, लेकिन आपका डेटा सुरक्षित रहेगा और उसी फोन नंबर से दोबारा पंजीकरण करने पर पुनर्स्थापित हो जाएगा।",
+    "accountRestoredTitle": "वापसी पर स्वागत है!",
+    "accountRestoredMessage": "आपका पिछला खाता सफलतापूर्वक पुनर्स्थापित हो गया है।",
     "farmerFallback": "किसान",
     "phoneFallback": "+91 - 0000000000",
     "appVersion": "ऐप संस्करण: 1.0.0",

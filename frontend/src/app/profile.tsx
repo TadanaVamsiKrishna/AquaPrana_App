@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -22,8 +23,15 @@ import {
   setAppLanguage,
 } from "../i18n";
 import { logout } from "../services/auth";
-import { getFarmerProfile, type FarmerProfile } from "../services/local-profile";
-import { getCurrentUserProfile } from "../services/profile";
+import {
+  clearFarmerProfile,
+  getFarmerProfile,
+  type FarmerProfile,
+} from "../services/local-profile";
+import {
+  getCurrentUserProfile,
+  softDeleteCurrentUser,
+} from "../services/profile";
 
 const colors = {
   primary: "#0A84FF",
@@ -121,6 +129,43 @@ export default function ProfileScreen() {
   const handleLogout = async () => {
     await logout();
     router.replace("/" as never);
+  };
+
+  const handleDeleteAccount = () => {
+    const confirmMessage = t("profile.deleteAccountConfirm");
+
+    const runDelete = async () => {
+      const { error } = await softDeleteCurrentUser(profile?.phone);
+      if (error) {
+        Alert.alert(t("common.error"), error.message);
+        return;
+      }
+
+      await clearFarmerProfile();
+      await logout();
+      router.replace("/phone-login" as never);
+    };
+
+    if (Platform.OS === "web") {
+      const confirmed =
+        typeof window !== "undefined" &&
+        window.confirm(`${t("profile.deleteAccountTitle")}\n\n${confirmMessage}`);
+      if (confirmed) {
+        void runDelete();
+      }
+      return;
+    }
+
+    Alert.alert(t("profile.deleteAccountTitle"), confirmMessage, [
+      { text: t("common.cancel"), style: "cancel" },
+      {
+        text: t("profile.deleteAccount"),
+        style: "destructive",
+        onPress: () => {
+          void runDelete();
+        },
+      },
+    ]);
   };
 
   const handleComingSoon = (title: string) => {
@@ -235,7 +280,7 @@ export default function ProfileScreen() {
                   icon="trash-2"
                   label={t("profile.deleteAccount")}
                   danger
-                  onPress={() => handleComingSoon(t("profile.deleteAccount"))}
+                  onPress={handleDeleteAccount}
                 />
               </View>
 

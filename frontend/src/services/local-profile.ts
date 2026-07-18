@@ -13,6 +13,10 @@ export const saveFarmerProfile = async (profile: FarmerProfile) => {
   await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
 };
 
+export const clearFarmerProfile = async () => {
+  await AsyncStorage.removeItem(PROFILE_KEY);
+};
+
 export const getFarmerProfile = async (): Promise<FarmerProfile | null> => {
   const raw = await AsyncStorage.getItem(PROFILE_KEY);
 
