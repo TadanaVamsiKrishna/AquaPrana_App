@@ -23,6 +23,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { AquaChatMessageBubble } from "../components/aqua-chat-message";
+import { AquaChatHistoryDrawer } from "../components/aqua-chat-history-drawer";
 import { BottomNav } from "../components/bottom-nav";
 import {
   GENERIC_ASSISTANT_ID,
@@ -73,6 +74,7 @@ export default function AquaGptScreen() {
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const [pondPickerOpen, setPondPickerOpen] = useState(false);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [staleLogDays, setStaleLogDays] = useState<number | null>(null);
   const [profileInitial, setProfileInitial] = useState("G");
 
@@ -249,17 +251,31 @@ export default function AquaGptScreen() {
               <Feather name="chevron-down" size={18} color={colors.primary} />
             </Pressable>
 
-            <Pressable
-              onPress={() => router.push("/edit-profile" as never)}
-              style={({ pressed }) => [
-                styles.profileAvatar,
-                pressed && styles.pressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={t("profile.title")}
-            >
-              <Text style={styles.profileAvatarText}>{profileInitial}</Text>
-            </Pressable>
+            <View style={styles.headerRight}>
+              <Pressable
+                onPress={() => setHistoryOpen(true)}
+                style={({ pressed }) => [
+                  styles.iconButton,
+                  pressed && styles.pressed,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={t("aquagpt.history")}
+              >
+                <Feather name="clock" size={20} color={colors.textDark} />
+              </Pressable>
+
+              <Pressable
+                onPress={() => router.push("/edit-profile" as never)}
+                style={({ pressed }) => [
+                  styles.profileAvatar,
+                  pressed && styles.pressed,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={t("profile.title")}
+              >
+                <Text style={styles.profileAvatarText}>{profileInitial}</Text>
+              </Pressable>
+            </View>
           </View>
 
           {staleLogDays != null ? (
@@ -499,6 +515,14 @@ export default function AquaGptScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      <AquaChatHistoryDrawer
+        visible={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        pondName={
+          selectedPondName ?? t("aquagpt.selectPondFallback")
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -527,6 +551,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     minWidth: 0,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
   pondSelector: {
     flexDirection: "row",

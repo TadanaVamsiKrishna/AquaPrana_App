@@ -19,9 +19,15 @@ import {
   type AquaGPTRequestContext,
 } from "../services/aquagpt";
 import {
+  createAquaGptSession,
+  deleteAquaGptSession,
   fetchAquaGptMessages,
-  getOrCreateAquaGptSession,
+  getLatestAquaGptSession,
+  isValidAquaGptUuid,
+  listAquaGptSessionsForPond,
+  renameAquaGptSession,
   saveAquaGptMessage,
+  type AquaGptSessionSummary,
 } from "../services/aquagpt-messages";
 import { getFarmerProfile } from "../services/local-profile";
 import { getSupabasePonds } from "../services/pond";
@@ -79,6 +85,7 @@ type AquaChatContextValue = {
   selectedPondId: string | null;
   selectedPondName: string | null;
   isGenericMode: boolean;
+  activeSessionId: string | null;
   setDraft: (value: string) => void;
   setSelectedPondId: (pondId: string) => void;
   sendQuestion: (
@@ -95,6 +102,16 @@ type AquaChatContextValue = {
   ) => Promise<void>;
   refreshPonds: () => Promise<void>;
   reloadMessages: () => Promise<void>;
+  startNewConversation: () => Promise<void>;
+  openConversation: (sessionId: string) => Promise<void>;
+  listConversations: () => Promise<AquaGptSessionSummary[]>;
+  renameConversation: (
+    sessionId: string,
+    title: string,
+  ) => Promise<{ error: Error | null }>;
+  deleteConversation: (
+    sessionId: string,
+  ) => Promise<{ error: Error | null }>;
 };
 
 const AquaChatContext = createContext<AquaChatContextValue | null>(null);
@@ -144,10 +161,17 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
   const messagesRef = useRef<ChatMessage[]>([]);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const welcomeReadyRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const sessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const setActiveSessionId = useCallback((nextSessionId: string | null) => {
+    sessionIdRef.current = nextSessionId;
+    setSessionId(nextSessionId);
+  }, []);
 
   const refreshPonds = useCallback(async () => {
     const { data, error } = await getSupabasePonds();
@@ -203,9 +227,12 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
   const loadSessionMessages = useCallback(
     async (nextPondId: string | null, nextUserId: string | null) => {
+      // Drop any in-flight session create from the previous pond.
+      sessionCreatePromiseRef.current = null;
+
       if (!nextUserId) {
         setMessages([buildWelcomeMessage(farmerName)]);
-        setSessionId(null);
+        setActiveSessionId(null);
         return;
       }
 
@@ -214,21 +241,28 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       const pondId =
         nextPondId === GENERIC_ASSISTANT_ID ? null : nextPondId;
 
-      const { sessionId: nextSessionId, error: sessionError } =
-        await getOrCreateAquaGptSession(nextUserId, pondId);
+      const { sessionId: latestSessionId, error: sessionError } =
+        await getLatestAquaGptSession(nextUserId, pondId);
 
-      if (sessionError || !nextSessionId) {
+      if (sessionError) {
         console.log("[AquaChat] session error:", sessionError);
         setMessages([buildWelcomeMessage(farmerName)]);
-        setSessionId(null);
+        setActiveSessionId(null);
         setIsLoadingMessages(false);
         return;
       }
 
-      setSessionId(nextSessionId);
+      if (!latestSessionId) {
+        setActiveSessionId(null);
+        setMessages([buildWelcomeMessage(farmerName)]);
+        setIsLoadingMessages(false);
+        return;
+      }
+
+      setActiveSessionId(latestSessionId);
 
       const { messages: storedMessages, error: messagesError } =
-        await fetchAquaGptMessages(nextSessionId);
+        await fetchAquaGptMessages(latestSessionId);
 
       if (messagesError) {
         console.log("[AquaChat] messages error:", messagesError);
@@ -245,7 +279,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
       setIsLoadingMessages(false);
     },
-    [farmerName],
+    [farmerName, setActiveSessionId],
   );
 
   useEffect(() => {
@@ -285,39 +319,175 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
     void loadSessionMessages(selectedPondId, userId);
   }, [selectedPondId, userId, loadSessionMessages]);
 
-  const ensureSession = useCallback(async () => {
-    if (sessionId || !userId) {
-      return sessionId;
+  const ensureSession = useCallback(async (): Promise<string> => {
+    if (isValidAquaGptUuid(sessionIdRef.current)) {
+      return sessionIdRef.current;
+    }
+
+    // Drop invalid values like "undefined" / "" so we recreate cleanly.
+    if (sessionIdRef.current) {
+      console.log("[AquaChat] clearing invalid sessionId:", sessionIdRef.current);
+      setActiveSessionId(null);
+    }
+
+    if (!isValidAquaGptUuid(userId)) {
+      throw new Error(
+        userId ? "Invalid user_id." : "Authentication failed",
+      );
+    }
+
+    // Reuse one in-flight create so user + assistant (or rapid sends)
+    // never open multiple sessions for the same turn.
+    if (sessionCreatePromiseRef.current) {
+      return sessionCreatePromiseRef.current;
     }
 
     const pondId =
       selectedPondId === GENERIC_ASSISTANT_ID ? null : selectedPondId;
-    const { sessionId: nextSessionId, error } = await getOrCreateAquaGptSession(
+
+    if (pondId != null && !isValidAquaGptUuid(pondId)) {
+      throw new Error("Invalid pond_id.");
+    }
+
+    sessionCreatePromiseRef.current = (async () => {
+      if (isValidAquaGptUuid(sessionIdRef.current)) {
+        return sessionIdRef.current;
+      }
+
+      const { sessionId: nextSessionId, error } = await createAquaGptSession(
+        userId,
+        pondId,
+      );
+
+      if (error || !isValidAquaGptUuid(nextSessionId)) {
+        console.log("[AquaChat] ensure session error:", error);
+        throw error ?? new Error("Failed to create AquaGPT session.");
+      }
+
+      setActiveSessionId(nextSessionId);
+      console.log("[AquaChat] session ready", {
+        sessionId: nextSessionId,
+        pondId,
+        userId,
+      });
+      return nextSessionId;
+    })().finally(() => {
+      sessionCreatePromiseRef.current = null;
+    });
+
+    return sessionCreatePromiseRef.current;
+  }, [selectedPondId, setActiveSessionId, userId]);
+
+  const startNewConversation = useCallback(async () => {
+    // Clear UI only — session is created on the first sent message so
+    // empty threads do not clutter history.
+    sessionCreatePromiseRef.current = null;
+    setActiveSessionId(null);
+    setDraft("");
+    setMessages([buildWelcomeMessage(farmerName)]);
+
+    if (!userId) {
+      Alert.alert(
+        "Sign in required",
+        "Please sign in again to start a new conversation.",
+      );
+    }
+  }, [farmerName, setActiveSessionId, userId]);
+
+  const openConversation = useCallback(
+    async (nextSessionId: string) => {
+      setIsLoadingMessages(true);
+      sessionCreatePromiseRef.current = null;
+      setActiveSessionId(nextSessionId);
+
+      const { messages: storedMessages, error } =
+        await fetchAquaGptMessages(nextSessionId);
+
+      if (error) {
+        console.log("[AquaChat] open conversation error:", error);
+        setMessages([buildWelcomeMessage(farmerName)]);
+        setIsLoadingMessages(false);
+        return;
+      }
+
+      setDraft("");
+      setMessages(
+        storedMessages.length > 0
+          ? storedMessages
+          : [buildWelcomeMessage(farmerName)],
+      );
+      setIsLoadingMessages(false);
+    },
+    [farmerName, setActiveSessionId],
+  );
+
+  const listConversations = useCallback(async () => {
+    if (!userId) {
+      return [];
+    }
+
+    const pondId =
+      selectedPondId === GENERIC_ASSISTANT_ID ? null : selectedPondId;
+    const { sessions, error } = await listAquaGptSessionsForPond(
       userId,
       pondId,
     );
 
-    if (error || !nextSessionId) {
-      console.log("[AquaChat] ensure session error:", error);
-      return null;
+    if (error) {
+      console.log("[AquaChat] list conversations error:", error);
+      return [];
     }
 
-    setSessionId(nextSessionId);
-    return nextSessionId;
-  }, [selectedPondId, sessionId, userId]);
+    return sessions;
+  }, [selectedPondId, userId]);
+
+  const renameConversation = useCallback(
+    async (targetSessionId: string, title: string) => {
+      return renameAquaGptSession(targetSessionId, title);
+    },
+    [],
+  );
+
+  const deleteConversation = useCallback(
+    async (targetSessionId: string) => {
+      const { error } = await deleteAquaGptSession(targetSessionId);
+      if (error) {
+        return { error };
+      }
+
+      if (sessionIdRef.current === targetSessionId) {
+        await startNewConversation();
+      }
+
+      return { error: null };
+    },
+    [startNewConversation],
+  );
 
   const persistMessage = useCallback(
     async (message: ChatMessage, pondId: string | null) => {
-      const activeSessionId = sessionId ?? (await ensureSession());
-      if (!activeSessionId || !userId || message.id === "welcome") {
+      if (message.id === "welcome") {
         return message;
       }
+
+      // Never insert messages until a valid session UUID exists.
+      const activeSessionId = await ensureSession();
+      if (!isValidAquaGptUuid(activeSessionId)) {
+        throw new Error("Missing valid session_id.");
+      }
+      if (!isValidAquaGptUuid(userId)) {
+        throw new Error(
+          userId ? "Invalid user_id." : "Authentication failed",
+        );
+      }
+
+      const safePondId = isValidAquaGptUuid(pondId) ? pondId : null;
 
       const { message: saved, error } = await saveAquaGptMessage(
         {
           sessionId: activeSessionId,
           userId,
-          pondId,
+          pondId: safePondId,
           role: message.role,
           messageType: message.messageType ?? "text",
           content:
@@ -333,12 +503,16 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
       if (error) {
         console.log("[AquaChat] save message error:", error);
+        Alert.alert(
+          "Unable to save chat",
+          error.message || "Your message was sent, but history could not be saved.",
+        );
         return message;
       }
 
       return saved ?? message;
     },
-    [ensureSession, sessionId, userId],
+    [ensureSession, userId],
   );
 
   const requestAssistantReply = useCallback(
@@ -358,12 +532,28 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
               : message.text,
         }));
 
+      const sessionId = await ensureSession();
+
+      console.log({
+        sessionId,
+        pondId: context.pondId,
+        userId,
+        requestBody: {
+          mode: context.mode,
+          question,
+          sessionId,
+          pondId: context.pondId,
+          userId,
+        },
+      });
+
       const reply = await askAquaGPT(question, {
         ...requestContext,
         pondId: context.pondId,
         cycleId: context.cycleId,
         mode: context.mode,
         screen: context.screen,
+        sessionId,
         conversationHistory: history,
       });
 
@@ -374,28 +564,37 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
         messageType: "text",
       };
     },
-    [resolveContext],
+    [ensureSession, resolveContext, userId],
   );
 
   const appendAssistantReply = useCallback(
     async (question: string, requestContext?: AquaGPTRequestContext) => {
+      const context = resolveContext(requestContext);
       try {
         const assistantMessage = await requestAssistantReply(
           question,
           requestContext,
         );
         setMessages((current) => [...current, assistantMessage]);
-        const context = resolveContext(requestContext);
         await persistMessage(assistantMessage, context.pondId);
       } catch (error) {
+        const detail =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
         console.log("[AquaChat] send error:", error);
+        console.log("[AquaChat] send error detail:", detail);
+
         const fallback: ChatMessage = {
           id: `assistant-${Date.now()}`,
           role: "assistant",
-          text: "Sorry, I couldn't get a response from AquaGPT.",
+          text: detail || "Unable to reach AquaGPT server.",
           messageType: "text",
         };
         setMessages((current) => [...current, fallback]);
+        await persistMessage(fallback, context.pondId);
       }
     },
     [persistMessage, requestAssistantReply, resolveContext],
@@ -436,30 +635,64 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       setDraft("");
       setIsSending(true);
 
-      const savedUserMessage = await persistMessage(
-        userMessage,
-        context.pondId,
-      );
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === userMessage.id ? savedUserMessage : message,
-        ),
-      );
-
       try {
+        // Create/reuse a valid session UUID before any message insert or AI call.
+        const sessionId = await ensureSession();
+        console.log({
+          sessionId,
+          pondId: context.pondId,
+          userId,
+          requestBody: {
+            mode: context.mode,
+            question: trimmed,
+            sessionId,
+            pondId: context.pondId,
+            userId,
+          },
+        });
+
+        const savedUserMessage = await persistMessage(
+          userMessage,
+          context.pondId,
+        );
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === userMessage.id ? savedUserMessage : message,
+          ),
+        );
+
         await appendAssistantReply(trimmed, requestContext);
+      } catch (error) {
+        const detail =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+        console.log("[AquaChat] sendQuestion failed:", error);
+        setMessages((current) => [
+          ...current,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            text: detail || "Unable to reach AquaGPT server.",
+            messageType: "text",
+          },
+        ]);
       } finally {
         setIsSending(false);
       }
     },
     [
       appendAssistantReply,
+      ensureSession,
       isSending,
       isUploading,
       persistMessage,
       resolveContext,
       selectedPondId,
       selectedPondName,
+      userId,
     ],
   );
 
@@ -791,6 +1024,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       selectedPondId,
       selectedPondName,
       isGenericMode,
+      activeSessionId: sessionId,
       setDraft,
       setSelectedPondId,
       sendQuestion,
@@ -800,6 +1034,11 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       refreshPonds,
       reloadMessages,
+      startNewConversation,
+      openConversation,
+      listConversations,
+      renameConversation,
+      deleteConversation,
     }),
     [
       messages,
@@ -812,6 +1051,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       selectedPondId,
       selectedPondName,
       isGenericMode,
+      sessionId,
       setSelectedPondId,
       sendQuestion,
       sendImageAttachment,
@@ -820,6 +1060,11 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       refreshPonds,
       reloadMessages,
+      startNewConversation,
+      openConversation,
+      listConversations,
+      renameConversation,
+      deleteConversation,
     ],
   );
 

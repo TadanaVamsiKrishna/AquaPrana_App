@@ -9,10 +9,33 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const GROQ_TIMEOUT_MS = 45_000;
+
 type ConversationTurn = {
   role?: string;
   text?: string;
 };
+
+function jsonResponse(
+  body: Record<string, unknown>,
+  status = 200,
+) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+    },
+  });
+}
+
+function isValidUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(value)
+  );
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -21,10 +44,21 @@ serve(async (req) => {
     });
   }
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SERVICE_ROLE_KEY")!,
-  );
+  const serviceKey =
+    Deno.env.get("SERVICE_ROLE_KEY") ??
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+
+  if (!supabaseUrl || !serviceKey) {
+    console.error("[aquagpt] Missing SUPABASE_URL or service role key");
+    return jsonResponse(
+      { error: "Server configuration error: missing Supabase credentials." },
+      500,
+    );
+  }
+
+  const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
     const body = await req.json();
@@ -35,6 +69,7 @@ serve(async (req) => {
       userId,
       screen,
       mode,
+      sessionId,
       conversationHistory,
       latestLogsSummary,
       feedScheduleSummary,
@@ -42,22 +77,24 @@ serve(async (req) => {
       inventorySummary,
     } = body ?? {};
 
-    if (!question) {
-      return new Response(
-        JSON.stringify({
-          error: "Question is required",
-        }),
-        {
-          status: 400,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-          },
-        },
-      );
+    console.log("[aquagpt] request", {
+      mode,
+      pondId: pondId ?? null,
+      cycleId: cycleId ?? null,
+      sessionId: sessionId ?? null,
+      userId: userId ?? null,
+      screen: screen ?? null,
+      questionPreview:
+        typeof question === "string" ? question.slice(0, 120) : question,
+    });
+
+    if (!question || typeof question !== "string" || !question.trim()) {
+      return jsonResponse({ error: "Question is required" }, 400);
     }
 
-    const isGeneric = mode === "generic" || !pondId;
+    const resolvedPondId = isValidUuid(pondId) ? pondId : null;
+    const resolvedCycleId = isValidUuid(cycleId) ? cycleId : null;
+    const isGeneric = mode === "generic" || !resolvedPondId;
 
     const history = Array.isArray(conversationHistory)
       ? (conversationHistory as ConversationTurn[])
@@ -70,6 +107,7 @@ serve(async (req) => {
     let userContent = "";
 
     if (isGeneric) {
+      // Generic Assistant: question only — no pond/cycle/log/inventory fetches.
       systemPrompt = `
 You are AquaGPT, an AI shrimp/fish farming assistant inside AquaPrana.
 
@@ -89,6 +127,7 @@ Application Context
 Mode: generic
 User ID: ${userId ?? "unavailable"}
 Current Screen: ${screen ?? "unavailable"}
+Session ID: ${sessionId ?? "unavailable"}
 Pond ID: none
 Crop Cycle ID: none
 
@@ -96,7 +135,7 @@ Recent Conversation:
 ${history || "none"}
 
 Farmer Question:
-${question}
+${question.trim()}
 
 Answer as a general aquaculture assistant. Do not use or invent pond-specific data.
 `;
@@ -104,37 +143,27 @@ Answer as a general aquaculture assistant. Do not use or invent pond-specific da
       const { data: pond, error: pondError } = await supabase
         .from("ponds")
         .select("*")
-        .eq("id", pondId)
+        .eq("id", resolvedPondId)
         .single();
 
       if (pondError) {
-        return new Response(
-          JSON.stringify({
-            error: pondError.message,
-          }),
-          {
-            status: 400,
-            headers: {
-              ...corsHeaders,
-              "Content-Type": "application/json",
-            },
-          },
-        );
+        console.error("[aquagpt] pond fetch error:", pondError);
+        return jsonResponse({ error: pondError.message }, 400);
       }
 
       let cycle = null as Record<string, unknown> | null;
-      if (cycleId) {
+      if (resolvedCycleId) {
         const { data } = await supabase
           .from("crop_cycles")
           .select("*")
-          .eq("id", cycleId)
+          .eq("id", resolvedCycleId)
           .maybeSingle();
         cycle = data;
       } else {
         const { data } = await supabase
           .from("crop_cycles")
           .select("*")
-          .eq("pond_id", pondId)
+          .eq("pond_id", resolvedPondId)
           .ilike("status", "active")
           .order("created_at", { ascending: false })
           .limit(1)
@@ -145,7 +174,7 @@ Answer as a general aquaculture assistant. Do not use or invent pond-specific da
       const { data: latestLog } = await supabase
         .from("pond_logs")
         .select("*")
-        .eq("pond_id", pondId)
+        .eq("pond_id", resolvedPondId)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -155,8 +184,9 @@ Application Context
 Mode: pond
 User ID: ${userId ?? "unavailable"}
 Current Screen: ${screen ?? "unavailable"}
-Pond ID: ${pondId}
-Cycle ID: ${cycle?.id ?? cycleId ?? "unavailable"}
+Session ID: ${sessionId ?? "unavailable"}
+Pond ID: ${resolvedPondId}
+Cycle ID: ${cycle?.id ?? resolvedCycleId ?? "unavailable"}
 
 Selected Pond Information
 Pond Name: ${pond?.name}
@@ -219,7 +249,7 @@ Rules:
 ${pondContext}
 
 Farmer Question:
-${question}
+${question.trim()}
 
 Answer using the pond information above.
 If information is missing, clearly mention that.
@@ -229,88 +259,97 @@ If information is missing, clearly mention that.
     const apiKey = Deno.env.get("GROQ_API_KEY");
 
     if (!apiKey) {
-      return new Response(
-        JSON.stringify({
-          error: "GROQ_API_KEY not found",
-        }),
-        {
-          status: 500,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-          },
-        },
+      console.error("[aquagpt] GROQ_API_KEY missing");
+      return jsonResponse(
+        { error: "LLM API key is missing." },
+        500,
       );
     }
 
-    const groqResponse = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS);
+
+    let groqResponse: Response;
+    try {
+      groqResponse = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [
+              {
+                role: "system",
+                content: systemPrompt,
+              },
+              {
+                role: "user",
+                content: userContent,
+              },
+            ],
+            temperature: 0.3,
+            max_tokens: 500,
+          }),
         },
-        body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt,
-            },
-            {
-              role: "user",
-              content: userContent,
-            },
-          ],
-          temperature: 0.3,
-          max_tokens: 500,
-        }),
-      },
-    );
+      );
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      const aborted =
+        fetchError instanceof DOMException && fetchError.name === "AbortError";
+      console.error("[aquagpt] Groq fetch failed:", fetchError);
+      return jsonResponse(
+        {
+          error: aborted
+            ? "LLM request timed out."
+            : fetchError instanceof Error
+            ? fetchError.message
+            : "Unable to reach LLM provider.",
+        },
+        aborted ? 504 : 502,
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const groqData = await groqResponse.json();
 
     if (!groqResponse.ok) {
-      return new Response(
-        JSON.stringify({
-          error: groqData,
-        }),
-        {
-          status: groqResponse.status,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-          },
-        },
+      console.error("[aquagpt] Groq API error:", groqResponse.status, groqData);
+      const message =
+        typeof groqData?.error === "string"
+          ? groqData.error
+          : groqData?.error?.message ??
+            JSON.stringify(groqData);
+      return jsonResponse(
+        { error: message, status: groqResponse.status },
+        groqResponse.status >= 400 ? groqResponse.status : 502,
       );
     }
 
-    return new Response(
-      JSON.stringify({
-        answer:
-          groqData.choices?.[0]?.message?.content ?? "No response received.",
-      }),
-      {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const answer =
+      groqData.choices?.[0]?.message?.content ?? "No response received.";
+
+    console.log("[aquagpt] success", {
+      mode: isGeneric ? "generic" : "pond",
+      answerLength: typeof answer === "string" ? answer.length : 0,
+    });
+
+    return jsonResponse({ answer });
   } catch (err) {
-    return new Response(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : "Unknown error",
-      }),
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error("[aquagpt] unhandled error:", message, stack);
+    return jsonResponse(
       {
-        status: 500,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-        },
+        error: message,
+        stack: stack ?? null,
       },
+      500,
     );
   }
 });
