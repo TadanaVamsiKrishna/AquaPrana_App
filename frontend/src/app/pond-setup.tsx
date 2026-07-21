@@ -426,58 +426,60 @@ export default function PondSetupScreen() {
                 </View>
               </View>
 
-              <View style={styles.locationOptionCard}>
-                <View style={styles.locationOptionHeader}>
-                  <Text style={styles.locationOptionEmoji}>📍</Text>
-                  <Text style={styles.locationOptionTitle}>
-                    Use Current Location
+              <View style={styles.locationOptionsRow}>
+                <View style={[styles.locationOptionCard, styles.locationOptionCardLeft]}>
+                  <View style={styles.locationOptionHeader}>
+                    <Text style={styles.locationOptionEmoji}>📍</Text>
+                    <Text style={styles.locationOptionTitle}>
+                      Use Current Location
+                    </Text>
+                  </View>
+                  <Text style={styles.locationOptionDescription}>
+                    Automatically detect your current GPS location.
                   </Text>
+                  <Pressable
+                    onPress={() => {
+                      void handleUseCurrentLocation();
+                    }}
+                    disabled={isCapturingLocation}
+                    style={({ pressed }) => [
+                      styles.locationButton,
+                      (pressed || isCapturingLocation) &&
+                        styles.locationButtonPressed,
+                    ]}
+                    accessibilityRole="button"
+                  >
+                    <Feather name="navigation" size={16} color={colors.primary} />
+                    <Text style={styles.locationButtonText}>
+                      {isCapturingLocation
+                        ? "Detecting..."
+                        : "Use Current Location"}
+                    </Text>
+                  </Pressable>
                 </View>
-                <Text style={styles.locationOptionDescription}>
-                  Automatically detect your current GPS location.
-                </Text>
-                <Pressable
-                  onPress={() => {
-                    void handleUseCurrentLocation();
-                  }}
-                  disabled={isCapturingLocation}
-                  style={({ pressed }) => [
-                    styles.locationButton,
-                    (pressed || isCapturingLocation) &&
-                      styles.locationButtonPressed,
-                  ]}
-                  accessibilityRole="button"
-                >
-                  <Feather name="navigation" size={18} color={colors.primary} />
-                  <Text style={styles.locationButtonText}>
-                    {isCapturingLocation
-                      ? "Detecting..."
-                      : "Use Current Location"}
-                  </Text>
-                </Pressable>
-              </View>
 
-              <View style={styles.locationOptionCard}>
-                <View style={styles.locationOptionHeader}>
-                  <Text style={styles.locationOptionEmoji}>🗺️</Text>
-                  <Text style={styles.locationOptionTitle}>
-                    Select on Google Map
+                <View style={styles.locationOptionCard}>
+                  <View style={styles.locationOptionHeader}>
+                    <Text style={styles.locationOptionEmoji}>🗺️</Text>
+                    <Text style={styles.locationOptionTitle}>
+                      Select on Google Map
+                    </Text>
+                  </View>
+                  <Text style={styles.locationOptionDescription}>
+                    Choose the exact pond location by placing a pin on the map.
                   </Text>
+                  <Pressable
+                    onPress={handleOpenGoogleMap}
+                    style={({ pressed }) => [
+                      styles.locationButton,
+                      pressed && styles.locationButtonPressed,
+                    ]}
+                    accessibilityRole="button"
+                  >
+                    <Feather name="map" size={16} color={colors.primary} />
+                    <Text style={styles.locationButtonText}>Open Google Map</Text>
+                  </Pressable>
                 </View>
-                <Text style={styles.locationOptionDescription}>
-                  Choose the exact pond location by placing a pin on the map.
-                </Text>
-                <Pressable
-                  onPress={handleOpenGoogleMap}
-                  style={({ pressed }) => [
-                    styles.locationButton,
-                    pressed && styles.locationButtonPressed,
-                  ]}
-                  accessibilityRole="button"
-                >
-                  <Feather name="map" size={18} color={colors.primary} />
-                  <Text style={styles.locationButtonText}>Open Google Map</Text>
-                </Pressable>
               </View>
 
               <View style={styles.selectedLocationBox}>
@@ -722,55 +724,70 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginTop: 3,
   },
+  locationOptionsRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginBottom: 12,
+  },
   locationOptionCard: {
+    flex: 1,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.paleBlue,
     borderRadius: 18,
-    padding: 14,
-    marginBottom: 12,
+    padding: 12,
+  },
+  locationOptionCardLeft: {
+    marginRight: 10,
   },
   locationOptionHeader: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 6,
   },
   locationOptionEmoji: {
-    fontSize: 16,
-    marginRight: 8,
+    fontSize: 14,
+    marginRight: 6,
+    marginTop: 1,
   },
   locationOptionTitle: {
     color: colors.text,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: "900",
     flex: 1,
+    lineHeight: 18,
   },
   locationOptionDescription: {
     color: colors.muted,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     fontWeight: "500",
-    marginBottom: 12,
+    marginBottom: 10,
+    minHeight: 48,
   },
   locationButton: {
-    height: 50,
-    borderRadius: 16,
+    minHeight: 44,
+    borderRadius: 14,
     backgroundColor: colors.softBlue,
     borderWidth: 1,
     borderColor: colors.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    gap: 6,
   },
   locationButtonPressed: {
     opacity: 0.82,
   },
   locationButtonText: {
     color: colors.primary,
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: "900",
-    marginLeft: 8,
+    textAlign: "center",
+    flexShrink: 1,
   },
   selectedLocationBox: {
     marginTop: 15,
