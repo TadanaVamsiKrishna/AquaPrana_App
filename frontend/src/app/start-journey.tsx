@@ -11,6 +11,8 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { resolvePondId } from "../lib/pond-route";
+import { getPondDraft } from "../services/local-ponds";
 
 const colors = {
   primary: "#0A84FF",
@@ -66,20 +68,72 @@ function RadioButton({ selected }: { selected: boolean }) {
 
 export default function StartJourneyScreen() {
   const router = useRouter();
-  const { pondId } = useLocalSearchParams<{ pondId: string }>();
+  const params = useLocalSearchParams<{
+    pondId?: string | string[];
+    pondName?: string | string[];
+  }>();
+  const paramPondId = resolvePondId(params.pondId);
+  const pondName = Array.isArray(params.pondName)
+    ? params.pondName[0]
+    : params.pondName;
   const [selectedOption, setSelectedOption] = useState<JourneyOption>("new");
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    let pondId = paramPondId;
+
+    // Fallback if Close Cycle opened this screen without params.
     if (!pondId) {
-      Alert.alert("Pond not found", "Please set up your pond again.");
-      return;
+      const draft = await getPondDraft();
+      pondId = draft?.id ?? null;
     }
 
     if (selectedOption === "new") {
-      router.push({
-        pathname: "/crop-details",
-        params: { pondId },
-      } as never);
+      const destination = "/crop-details";
+      const navigationParams: Record<string, string> = {
+        pondId: pondId ?? "",
+      };
+      if (pondName) {
+        navigationParams.pondName = pondName;
+      }
+
+      console.log("[start-journey] continue", {
+        selectedOption,
+        destination,
+        navigationParams,
+      });
+
+      if (!pondId) {
+        Alert.alert(
+          "Pond not found",
+          "Missing pond details. Please open the pond again from Cycle History.",
+        );
+        return;
+      }
+
+      try {
+        router.push({
+          pathname: "/crop-details",
+          params: navigationParams,
+        } as never);
+      } catch (error) {
+        console.log("[start-journey] navigation error", {
+          selectedOption,
+          destination,
+          navigationParams,
+          error,
+        });
+        Alert.alert(
+          "Unable to continue",
+          error instanceof Error
+            ? error.message
+            : "Could not open Crop Details. Please try again.",
+        );
+      }
+      return;
+    }
+
+    if (!pondId) {
+      Alert.alert("Pond not found", "Please set up your pond again.");
       return;
     }
 
@@ -182,7 +236,9 @@ export default function StartJourneyScreen() {
           </View>
 
           <Pressable
-            onPress={handleContinue}
+            onPress={() => {
+              void handleContinue();
+            }}
             style={({ pressed }) => [
               styles.continueButton,
               pressed && styles.continueButtonPressed,

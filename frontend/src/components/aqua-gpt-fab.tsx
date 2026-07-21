@@ -26,6 +26,7 @@ const HIDDEN_PATHS = new Set([
   "/start-journey",
   "/farmer-profile",
   "/pond-setup",
+  "/pond-location-map",
   "/join-existing-cycle",
   "/manual-cycle-summary",
   "/explore",

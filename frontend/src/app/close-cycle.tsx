@@ -258,7 +258,13 @@ export default function CloseCycleScreen() {
           depth: pondDepth,
         });
 
-        router.replace("/start-journey" as never);
+        router.replace({
+          pathname: "/start-journey",
+          params: {
+            pondId,
+            pondName,
+          },
+        } as never);
         return;
       }
 

@@ -30,7 +30,7 @@ import {
   getHarvestWindowDisplay,
   calculateHarvestWindow,
 } from "../lib/harvest-window";
-
+import { resolvePondId } from "../lib/pond-route";
 
 import { createCropCycle } from "../services/cropCycle";
 
@@ -81,7 +81,10 @@ const handleDatePickerChange = (
 
 export default function CropDetailsScreen() {
   const router = useRouter();
-  const { pondId } = useLocalSearchParams<{ pondId: string }>();
+  const { pondId: pondIdParam } = useLocalSearchParams<{
+    pondId?: string | string[];
+  }>();
+  const pondId = resolvePondId(pondIdParam);
 
   const [category, setCategory] = useState("");
   const [species, setSpecies] = useState("");
@@ -212,17 +215,28 @@ export default function CropDetailsScreen() {
       harvest_window_end: harvestWindowEndDate.toISOString().split("T")[0],
     });
 
-    await createCropCycle(pondId, {
-      category,
-      species,
-      stockingDensity: Number(stockingDensity),
-      stockingDate,
-      seedSupplier,
-      harvestWindowStart: harvestWindowStartDate,
-      harvestWindowEnd: harvestWindowEndDate,
-    });
- 
-    router.replace("/home" as never);
+    try {
+      await createCropCycle(pondId, {
+        category,
+        species,
+        stockingDensity: Number(stockingDensity),
+        stockingDate,
+        seedSupplier,
+        harvestWindowStart: harvestWindowStartDate,
+        harvestWindowEnd: harvestWindowEndDate,
+      });
+
+      router.replace({
+        pathname: "/pond-cycles",
+        params: { pondId },
+      } as never);
+    } catch (error) {
+      console.log("[crop-details] save error:", error);
+      Alert.alert(
+        "Unable to save crop cycle",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    }
   };
 
   const renderHarvestValue = (

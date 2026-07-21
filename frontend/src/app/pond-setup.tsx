@@ -1,8 +1,13 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import * as Location from "expo-location";
 
 import { savePondDraft } from "../services/local-ponds";
 import { savePond } from "../services/pond";
+import {
+  consumePendingPondLocationSelection,
+  getPondLocationDisplayLabel,
+  reverseGeocodePlaceName,
+} from "../lib/pond-location";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -16,7 +21,7 @@ import {
   View,
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
  
 const colors = {
@@ -66,8 +71,11 @@ export default function PondSetupScreen() {
     latitude: number;
     longitude: number;
   } | null>(null);
- 
-  const [locationText, setLocationText] = useState("");
+
+  const [locationPlaceName, setLocationPlaceName] = useState<string | null>(
+    null,
+  );
+  const [isCapturingLocation, setIsCapturingLocation] = useState(false);
  
   const [touched, setTouched] = useState<TouchedFields>({
     pondName: false,
@@ -93,7 +101,8 @@ export default function PondSetupScreen() {
   const isFormValid =
     pondName.trim().length > 0 &&
     isPositiveNumber(area) &&
-    isPositiveNumber(averageDepth);
+    isPositiveNumber(averageDepth) &&
+    location != null;
  
   const markTouched = (field: keyof TouchedFields) => {
     setTouched((current) => ({
@@ -111,47 +120,65 @@ export default function PondSetupScreen() {
   };
 
   const [localPondId] = useState(() => Date.now().toString());
- 
-  const handleCaptureLocation = async () => {
+
+  useFocusEffect(
+    useCallback(() => {
+      const pending = consumePendingPondLocationSelection();
+      if (!pending) {
+        return;
+      }
+
+      setLocation({
+        latitude: pending.latitude,
+        longitude: pending.longitude,
+      });
+      setLocationPlaceName(pending.placeName);
+    }, []),
+  );
+
+  const handleUseCurrentLocation = async () => {
+    setIsCapturingLocation(true);
+
     try {
-      // Request location permission
       const { status } = await Location.requestForegroundPermissionsAsync();
- 
+
       if (status !== "granted") {
         Alert.alert(
           "Permission Denied",
-          "Location permission is required."
+          "Location permission is required to use your current location. You can still choose your pond manually on the map.",
         );
         return;
       }
- 
-      // Get current GPS location
+
       const currentLocation = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
- 
+
       const latitude = currentLocation.coords.latitude;
       const longitude = currentLocation.coords.longitude;
- 
-      // Save coordinates
+
       setLocation({
         latitude,
         longitude,
       });
- 
-      // Display coordinates on screen
-      setLocationText(
-        `Latitude: ${latitude}\nLongitude: ${longitude}`
-      );
- 
+
+      const placeName = await reverseGeocodePlaceName(latitude, longitude);
+      setLocationPlaceName(placeName);
     } catch (error) {
-      console.error(error);
-      Alert.alert(
-        "Error",
-        "Unable to get current location."
-      );
+      console.log("[pond-setup] current location error:", error);
+      Alert.alert("Error", "Unable to get current location.");
+    } finally {
+      setIsCapturingLocation(false);
     }
   };
+
+  const handleOpenGoogleMap = () => {
+    router.push("/pond-location-map" as never);
+  };
+
+  const selectedLocationLabel = getPondLocationDisplayLabel(
+    location ? locationPlaceName : null,
+  );
   const handleContinue = async () => {
     if (!isFormValid) {
       setTouched({
@@ -159,6 +186,13 @@ export default function PondSetupScreen() {
         area: true,
         depth: true,
       });
+
+      if (!location) {
+        Alert.alert(
+          "Location required",
+          "Please set the pond location using current location or the map before continuing.",
+        );
+      }
 
       return;
     }
@@ -383,58 +417,77 @@ export default function PondSetupScreen() {
                 <View style={styles.locationIconCircle}>
                   <Feather name="map-pin" size={22} color={colors.primary} />
                 </View>
- 
+
                 <View style={styles.locationCopy}>
                   <Text style={styles.locationTitle}>Pond Location</Text>
                   <Text style={styles.locationSubtitle}>
-                    Tap GPS coordinates for local data.
+                    Choose how you want to set the pond location.
                   </Text>
                 </View>
               </View>
- 
-              <Pressable
-                onPress={handleCaptureLocation}
- 
-                style={({ pressed }) => [
-                  styles.locationButton,
-                  pressed && styles.locationButtonPressed,
-                ]}
-                accessibilityRole="button"
-              >
-                <Feather name="navigation" size={18} color={colors.primary} />
-                <Text style={styles.locationButtonText}>Capture Location</Text>
-              </Pressable>
- 
-              {location && (
-  <View
-    style={{
-      marginTop: 15,
-      padding: 12,
-      backgroundColor: colors.softBlue,
-      borderRadius: 10,
-    }}
-  >
-    <Text
-      style={{
-        fontWeight: "700",
-        color: colors.text,
-        fontSize: 15,
-      }}
-    >
-      📍 Current Location
-    </Text>
- 
-    <Text
-      style={{
-        marginTop: 6,
-        color: colors.text,
-      }}
-    >
-      {locationText}
-    </Text>
-  </View>
-)}
- 
+
+              <View style={styles.locationOptionCard}>
+                <View style={styles.locationOptionHeader}>
+                  <Text style={styles.locationOptionEmoji}>📍</Text>
+                  <Text style={styles.locationOptionTitle}>
+                    Use Current Location
+                  </Text>
+                </View>
+                <Text style={styles.locationOptionDescription}>
+                  Automatically detect your current GPS location.
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void handleUseCurrentLocation();
+                  }}
+                  disabled={isCapturingLocation}
+                  style={({ pressed }) => [
+                    styles.locationButton,
+                    (pressed || isCapturingLocation) &&
+                      styles.locationButtonPressed,
+                  ]}
+                  accessibilityRole="button"
+                >
+                  <Feather name="navigation" size={18} color={colors.primary} />
+                  <Text style={styles.locationButtonText}>
+                    {isCapturingLocation
+                      ? "Detecting..."
+                      : "Use Current Location"}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.locationOptionCard}>
+                <View style={styles.locationOptionHeader}>
+                  <Text style={styles.locationOptionEmoji}>🗺️</Text>
+                  <Text style={styles.locationOptionTitle}>
+                    Select on Google Map
+                  </Text>
+                </View>
+                <Text style={styles.locationOptionDescription}>
+                  Choose the exact pond location by placing a pin on the map.
+                </Text>
+                <Pressable
+                  onPress={handleOpenGoogleMap}
+                  style={({ pressed }) => [
+                    styles.locationButton,
+                    pressed && styles.locationButtonPressed,
+                  ]}
+                  accessibilityRole="button"
+                >
+                  <Feather name="map" size={18} color={colors.primary} />
+                  <Text style={styles.locationButtonText}>Open Google Map</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.selectedLocationBox}>
+                <Text style={styles.selectedLocationTitle}>
+                  Selected Pond Location
+                </Text>
+                <Text style={styles.selectedLocationValue}>
+                  {selectedLocationLabel}
+                </Text>
+              </View>
             </View>
           </ScrollView>
  
@@ -669,6 +722,36 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginTop: 3,
   },
+  locationOptionCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.paleBlue,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 12,
+  },
+  locationOptionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  locationOptionEmoji: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  locationOptionTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "900",
+    flex: 1,
+  },
+  locationOptionDescription: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+    marginBottom: 12,
+  },
   locationButton: {
     height: 50,
     borderRadius: 16,
@@ -688,6 +771,24 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "900",
     marginLeft: 8,
+  },
+  selectedLocationBox: {
+    marginTop: 15,
+    padding: 12,
+    backgroundColor: colors.softBlue,
+    borderRadius: 10,
+  },
+  selectedLocationTitle: {
+    fontWeight: "700",
+    color: colors.text,
+    fontSize: 15,
+  },
+  selectedLocationValue: {
+    marginTop: 6,
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "600",
   },
   footer: {
     paddingHorizontal: 22,
