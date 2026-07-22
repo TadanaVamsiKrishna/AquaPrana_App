@@ -32,6 +32,8 @@ export type MyPondDashboardItem = {
   createdAt: string;
   abwStale: boolean;
   survivalRateNumeric: number | null;
+  latitude: number | null;
+  longitude: number | null;
 };
 
 const formatBiomass = (value: number | null | undefined) => {
@@ -174,6 +176,14 @@ export async function fetchMyPondsDashboard(): Promise<MyPondDashboardItem[]> {
         createdAt: pond.created_at ?? pond.updated_at ?? "",
         abwStale: isAbwStale(latestAbwByPond.get(pond.id) ?? null),
         survivalRateNumeric: latestCycle?.survival_rate ?? null,
+        latitude:
+          pond.latitude != null && Number.isFinite(Number(pond.latitude))
+            ? Number(pond.latitude)
+            : null,
+        longitude:
+          pond.longitude != null && Number.isFinite(Number(pond.longitude))
+            ? Number(pond.longitude)
+            : null,
       };
     })].sort(
     (left, right) =>

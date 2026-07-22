@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -24,6 +26,12 @@ import {
 } from "../services/pondsDashboardService";
 import { getPondSetupTimestamp } from "../services/pond";
 import { getSurvivalColorFromRate } from "../lib/cycle-metrics";
+import {
+  fetchWeatherForCoordinates,
+  resolveDeviceCoordinates,
+  weatherIconColor,
+  type WeatherSnapshot,
+} from "../services/weather";
 
  
 
@@ -263,10 +271,12 @@ export default function HomeScreen() {
   const [farmerName, setFarmerName] = useState("Farmer");
   const [activeTab, setActiveTab] = useState<PondTab>("all");
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [weather, setWeather] = useState<WeatherSnapshot | null>(null);
+  const [weatherUnavailable, setWeatherUnavailable] = useState(false);
 
   const loadData = useCallback(async () => {
-    setIsLoading(true);
     setLoadError(null);
 
     try {
@@ -283,15 +293,136 @@ export default function HomeScreen() {
         err instanceof Error ? err.message : t("home.unableToLoad"),
       );
       setPonds([]);
-    } finally {
-      setIsLoading(false);
     }
   }, [t]);
+
+  const weatherPond = useMemo(() => {
+    const candidates =
+      activeTab === "archived"
+        ? ponds.filter((pond) => pond.archived)
+        : ponds.filter((pond) => !pond.archived);
+
+    return (
+      candidates.find(
+        (pond) => pond.latitude != null && pond.longitude != null,
+      ) ?? null
+    );
+  }, [activeTab, ponds]);
+
+  const loadWeather = useCallback(
+    async (forceRefresh = false) => {
+      try {
+        let latitude = weatherPond?.latitude ?? null;
+        let longitude = weatherPond?.longitude ?? null;
+
+        if (latitude == null || longitude == null) {
+          const device = await resolveDeviceCoordinates();
+          latitude = device?.latitude ?? null;
+          longitude = device?.longitude ?? null;
+        }
+
+        if (latitude == null || longitude == null) {
+          setWeather((current) => {
+            setWeatherUnavailable(!current);
+            return current;
+          });
+          return;
+        }
+
+        // Show cached weather immediately, then refresh.
+        const cached = await fetchWeatherForCoordinates(latitude, longitude, {
+          forceRefresh: false,
+        });
+        if (cached.weather) {
+          setWeather(cached.weather);
+          setWeatherUnavailable(false);
+        }
+
+        if (!forceRefresh && cached.fromCache) {
+          return;
+        }
+
+        const result = await fetchWeatherForCoordinates(latitude, longitude, {
+          forceRefresh: true,
+        });
+
+        if (result.weather) {
+          setWeather(result.weather);
+          setWeatherUnavailable(false);
+          return;
+        }
+
+        setWeather((current) => {
+          setWeatherUnavailable(!current);
+          return current;
+        });
+      } catch (error) {
+        console.log("[home] weather load error:", error);
+        setWeather((current) => {
+          setWeatherUnavailable(!current);
+          return current;
+        });
+      }
+    },
+    [weatherPond],
+  );
+
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      let cancelled = false;
+
+      const bootstrap = async () => {
+        setIsLoading(true);
+        await loadData();
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      };
+
+      void bootstrap();
+
+      return () => {
+        cancelled = true;
+      };
     }, [loadData]),
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      const refreshWeather = async () => {
+        if (!cancelled) {
+          await loadWeather(true);
+        }
+      };
+
+      void refreshWeather();
+
+      const intervalId = setInterval(() => {
+        void loadWeather(true);
+      }, 15 * 60 * 1000);
+
+      return () => {
+        cancelled = true;
+        clearInterval(intervalId);
+      };
+    }, [loadWeather]),
+  );
+
+  useEffect(() => {
+    void loadWeather(true);
+  }, [weatherPond?.id, weatherPond?.latitude, weatherPond?.longitude]);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await loadData();
+      await loadWeather(true);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [loadData, loadWeather]);
 
   const visiblePonds = useMemo(() => {
     return ponds
@@ -304,6 +435,34 @@ export default function HomeScreen() {
           getPondSetupTimestamp({ created_at: left.createdAt }),
       );
   }, [ponds, activeTab]);
+
+  const weatherTempLabel = weather
+    ? `${weather.temperatureC}°C`
+    : weatherUnavailable
+      ? "--°C"
+      : "…°C";
+
+  const weatherConditionLabel = weather
+    ? weather.condition
+    : weatherUnavailable
+      ? "Weather unavailable"
+      : "Loading";
+
+  const useCloudImage =
+    !weather ||
+    weather.icon === "cloud" ||
+    weather.icon === "cloud-rain" ||
+    weather.icon === "cloud-drizzle" ||
+    weather.icon === "cloud-lightning" ||
+    weather.icon === "cloud-snow" ||
+    weatherUnavailable;
+
+  const weatherMciIcon =
+    weather?.icon === "sun" ? "weather-sunny" : "weather-cloudy";
+
+  const weatherIconTint = weather
+    ? weatherIconColor(weather.icon)
+    : "#93C5FD";
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -332,6 +491,30 @@ export default function HomeScreen() {
               </View>
             </Pressable>
 
+            <View style={styles.weatherCard}>
+              <View style={styles.weatherIconWrap}>
+                {useCloudImage ? (
+                  <Image
+                    source={require("../../assets/images/weather/weather-cloudy.png")}
+                    style={styles.weatherImage}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <MaterialCommunityIcons
+                    name={weatherMciIcon}
+                    size={22}
+                    color={weatherIconTint}
+                  />
+                )}
+              </View>
+              <View style={styles.weatherTextCol}>
+                <Text style={styles.weatherTemp}>{weatherTempLabel}</Text>
+                <Text style={styles.weatherLabel} numberOfLines={1}>
+                  {weatherConditionLabel}
+                </Text>
+              </View>
+            </View>
+
             <Pressable
               onPress={() => router.push("/notifications" as never)}
               style={styles.notificationButton}
@@ -341,12 +524,6 @@ export default function HomeScreen() {
               <Feather name="bell" size={20} color={colors.white} />
               <View style={styles.notificationDot} />
             </Pressable>
-          </View>
-
-          <View style={styles.weatherCard}>
-            <Feather name="sun" size={18} color="#FBBF24" />
-            <Text style={styles.weatherTemp}>28°C</Text>
-            <Text style={styles.weatherLabel}>{t("home.weather.partlyCloudy")}</Text>
           </View>
         </View>
 
@@ -419,6 +596,16 @@ export default function HomeScreen() {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => {
+                void handleRefresh();
+              }}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
         >
           {isLoading ? (
             <View style={styles.loadingState}>
@@ -479,9 +666,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   heroHeader: {
-    paddingHorizontal: 18,
-    paddingTop: 10,
-    paddingBottom: 18,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
     backgroundColor: colors.primaryDark,
@@ -489,50 +676,54 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 8,
   },
   profileEntry: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+    minWidth: 0,
   },
   brandLogo: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: "rgba(255,255,255,0.2)",
     alignItems: "center",
     justifyContent: "center",
   },
   brandLogoText: {
-    fontSize: 22,
+    fontSize: 20,
   },
   brandCopy: {
     flex: 1,
+    minWidth: 0,
   },
   brandName: {
     color: colors.white,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "900",
     letterSpacing: 1,
   },
   brandGreeting: {
     color: "rgba(255,255,255,0.88)",
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
-    marginTop: 2,
+    marginTop: 1,
   },
   notificationButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.12)",
   },
   notificationDot: {
     position: "absolute",
-    top: 8,
-    right: 8,
+    top: 7,
+    right: 7,
     width: 8,
     height: 8,
     borderRadius: 4,
@@ -541,26 +732,51 @@ const styles = StyleSheet.create({
     borderColor: colors.primaryDark,
   },
   weatherCard: {
-    alignSelf: "flex-end",
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    marginTop: 14,
-    backgroundColor: "rgba(255,255,255,0.16)",
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    gap: 8,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderRadius: 18,
+    paddingLeft: 6,
+    paddingRight: 12,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    shadowColor: "#001833",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 3,
+    maxWidth: 148,
+  },
+  weatherIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  weatherImage: {
+    width: 26,
+    height: 26,
+  },
+  weatherTextCol: {
+    flexShrink: 1,
+    justifyContent: "center",
+    minWidth: 0,
   },
   weatherTemp: {
     color: colors.white,
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 18,
     fontWeight: "800",
   },
   weatherLabel: {
-    color: "rgba(255,255,255,0.82)",
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.4,
+    color: "rgba(255,255,255,0.84)",
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: "600",
   },
   contentHeader: {
     flexDirection: "row",
