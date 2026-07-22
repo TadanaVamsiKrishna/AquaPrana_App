@@ -76,6 +76,9 @@ async function deleteAccountClientSide(userId: string) {
   await deleteByUserId("inventory_items", userId);
   await deleteByUserId("pond_expenses", userId);
   await deleteByUserId("farmer_price_configs", userId);
+  await deleteByUserId("reward_coupons", userId);
+  await supabase.from("referrals").delete().eq("referrer_user_id", userId);
+  await supabase.from("referrals").delete().eq("referred_user_id", userId);
   await deleteByUserId("ponds", userId);
 
   const { error: userDeleteError } = await supabase

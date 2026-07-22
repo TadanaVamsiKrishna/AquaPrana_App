@@ -3,6 +3,10 @@ import { useState } from "react";
 import { saveProfile } from "../services/profile";
 import { saveFarmerProfile } from "../services/local-profile";
 import {
+  applyReferralCode,
+  ensureReferralCode,
+} from "../services/referrals";
+import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -106,6 +110,7 @@ export default function FarmerProfileScreen() {
   const router = useRouter();
 
   const [name, setName] = useState("");
+  const [referralCode, setReferralCode] = useState("");
   const [selectedState, setSelectedState] = useState("");
   const [district, setDistrict] = useState("");
   const [language, setLanguage] = useState("");
@@ -238,7 +243,19 @@ export default function FarmerProfileScreen() {
       alert(error.message);
       return;
     }
-    
+
+    // Generate this user's own shareable referral code.
+    await ensureReferralCode(name.trim());
+
+    // If a friend's code was entered, validate and grant rewards.
+    const trimmedReferral = referralCode.trim();
+    if (trimmedReferral) {
+      const applied = await applyReferralCode(trimmedReferral);
+      if (!applied.ok && applied.error) {
+        alert(applied.error.message);
+      }
+    }
+
     router.replace("/pond-setup" as never);
   };
 
@@ -381,6 +398,24 @@ export default function FarmerProfileScreen() {
               {touched.name && !name.trim() ? (
                 <Text style={styles.errorText}>Name is required</Text>
               ) : null}
+            </View>
+
+            <View style={styles.fieldBlock}>
+              <View style={styles.fieldLabelRow}>
+                <Feather name="gift" size={18} color={colors.primary} />
+                <Text style={styles.fieldLabel}>Referral code (optional)</Text>
+              </View>
+
+              <TextInput
+                value={referralCode}
+                onChangeText={setReferralCode}
+                placeholder="Enter friend's referral code"
+                placeholderTextColor={colors.muted}
+                style={styles.inputControl}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                returnKeyType="done"
+              />
             </View>
 
             <View style={styles.fieldBlock}>

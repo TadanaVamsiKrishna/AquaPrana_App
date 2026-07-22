@@ -180,7 +180,7 @@ export default function ProfileScreen() {
     {
       icon: "gift" as const,
       label: t("profile.referEarn"),
-      onPress: () => handleComingSoon(t("profile.referEarn")),
+      onPress: () => router.push("/refer-earn" as never),
     },
     {
       icon: "edit-3" as const,
