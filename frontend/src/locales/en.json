@@ -104,7 +104,7 @@
     "historyToday": "Today",
     "historyYesterday": "Yesterday",
     "historyEarlier": "Earlier",
-    "historyEmpty": "No conversations for this pond yet.",
+    "historyEmpty": "No conversation history available for this pond.",
     "deleteConversationTitle": "Delete Conversation?",
     "deleteConversationBody": "This will permanently delete this conversation and all of its messages.",
     "delete": "Delete",

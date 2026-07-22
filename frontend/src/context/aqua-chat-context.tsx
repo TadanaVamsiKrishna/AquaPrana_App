@@ -22,7 +22,6 @@ import {
   createAquaGptSession,
   deleteAquaGptSession,
   fetchAquaGptMessages,
-  getLatestAquaGptSession,
   isValidAquaGptUuid,
   listAquaGptSessionsForPond,
   renameAquaGptSession,
@@ -163,6 +162,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
   const welcomeReadyRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
   const sessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
+  const chatScopeRef = useRef<string>("");
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -226,55 +226,21 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
   );
 
   const loadSessionMessages = useCallback(
-    async (nextPondId: string | null, nextUserId: string | null) => {
+    async (_nextPondId: string | null, nextUserId: string | null) => {
       // Drop any in-flight session create from the previous pond.
       sessionCreatePromiseRef.current = null;
 
-      if (!nextUserId) {
-        setMessages([buildWelcomeMessage(farmerName)]);
-        setActiveSessionId(null);
-        return;
-      }
-
+      // Do NOT auto-resume the latest session. Resuming caused every new
+      // question to append into one conversation, so History only showed a
+      // single card. Start a fresh chat; past threads stay in History and
+      // open explicitly via openConversation.
       setIsLoadingMessages(true);
+      setActiveSessionId(null);
+      setMessages([buildWelcomeMessage(farmerName)]);
 
-      const pondId =
-        nextPondId === GENERIC_ASSISTANT_ID ? null : nextPondId;
-
-      const { sessionId: latestSessionId, error: sessionError } =
-        await getLatestAquaGptSession(nextUserId, pondId);
-
-      if (sessionError) {
-        console.log("[AquaChat] session error:", sessionError);
-        setMessages([buildWelcomeMessage(farmerName)]);
-        setActiveSessionId(null);
+      if (!nextUserId) {
         setIsLoadingMessages(false);
         return;
-      }
-
-      if (!latestSessionId) {
-        setActiveSessionId(null);
-        setMessages([buildWelcomeMessage(farmerName)]);
-        setIsLoadingMessages(false);
-        return;
-      }
-
-      setActiveSessionId(latestSessionId);
-
-      const { messages: storedMessages, error: messagesError } =
-        await fetchAquaGptMessages(latestSessionId);
-
-      if (messagesError) {
-        console.log("[AquaChat] messages error:", messagesError);
-        setMessages([buildWelcomeMessage(farmerName)]);
-        setIsLoadingMessages(false);
-        return;
-      }
-
-      if (storedMessages.length === 0) {
-        setMessages([buildWelcomeMessage(farmerName)]);
-      } else {
-        setMessages(storedMessages);
       }
 
       setIsLoadingMessages(false);
@@ -315,6 +281,15 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
     if (!welcomeReadyRef.current) {
       return;
     }
+
+    // Only reset the chat when pond/user scope changes — not when the
+    // loadSessionMessages callback identity changes (e.g. farmerName load),
+    // which would wipe a conversation opened from History.
+    const scopeKey = `${userId ?? ""}:${selectedPondId ?? ""}`;
+    if (chatScopeRef.current === scopeKey) {
+      return;
+    }
+    chatScopeRef.current = scopeKey;
 
     void loadSessionMessages(selectedPondId, userId);
   }, [selectedPondId, userId, loadSessionMessages]);
@@ -400,23 +375,37 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       sessionCreatePromiseRef.current = null;
       setActiveSessionId(nextSessionId);
 
-      const { messages: storedMessages, error } =
-        await fetchAquaGptMessages(nextSessionId);
+      try {
+        const { messages: storedMessages, error } =
+          await fetchAquaGptMessages(nextSessionId);
 
-      if (error) {
-        console.log("[AquaChat] open conversation error:", error);
+        if (error) {
+          console.log("[AquaChat] open conversation error:", error);
+          Alert.alert(
+            "Unable to open conversation",
+            error.message || "Please try again.",
+          );
+          setMessages([buildWelcomeMessage(farmerName)]);
+          setIsLoadingMessages(false);
+          return;
+        }
+
+        setDraft("");
+        setMessages(
+          storedMessages.length > 0
+            ? storedMessages
+            : [buildWelcomeMessage(farmerName)],
+        );
+      } catch (error) {
+        console.log("[AquaChat] open conversation failed:", error);
+        Alert.alert(
+          "Unable to open conversation",
+          "Please check your connection and try again.",
+        );
         setMessages([buildWelcomeMessage(farmerName)]);
+      } finally {
         setIsLoadingMessages(false);
-        return;
       }
-
-      setDraft("");
-      setMessages(
-        storedMessages.length > 0
-          ? storedMessages
-          : [buildWelcomeMessage(farmerName)],
-      );
-      setIsLoadingMessages(false);
     },
     [farmerName, setActiveSessionId],
   );
@@ -428,17 +417,31 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
     const pondId =
       selectedPondId === GENERIC_ASSISTANT_ID ? null : selectedPondId;
-    const { sessions, error } = await listAquaGptSessionsForPond(
-      userId,
-      pondId,
-    );
 
-    if (error) {
-      console.log("[AquaChat] list conversations error:", error);
+    try {
+      const { sessions, error } = await listAquaGptSessionsForPond(
+        userId,
+        pondId,
+      );
+
+      if (error) {
+        console.log("[AquaChat] list conversations error:", error);
+        Alert.alert(
+          "Unable to load history",
+          error.message || "Please try again.",
+        );
+        return [];
+      }
+
+      return sessions;
+    } catch (error) {
+      console.log("[AquaChat] list conversations failed:", error);
+      Alert.alert(
+        "Unable to load history",
+        "Please check your connection and try again.",
+      );
       return [];
     }
-
-    return sessions;
   }, [selectedPondId, userId]);
 
   const renameConversation = useCallback(
@@ -604,6 +607,13 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
     setSelectedPondIdState(pondId);
   }, []);
 
+  const beginFreshChatSession = useCallback(() => {
+    // Every user question becomes its own History conversation.
+    // User + assistant for this turn still share one session_id.
+    sessionCreatePromiseRef.current = null;
+    setActiveSessionId(null);
+  }, [setActiveSessionId]);
+
   const sendQuestion = useCallback(
     async (question: string, requestContext?: AquaGPTRequestContext) => {
       const trimmed = question.trim();
@@ -636,7 +646,8 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
       setIsSending(true);
 
       try {
-        // Create/reuse a valid session UUID before any message insert or AI call.
+        // New conversation_id for this chat so History lists every question.
+        beginFreshChatSession();
         const sessionId = await ensureSession();
         console.log({
           sessionId,
@@ -685,6 +696,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
     },
     [
       appendAssistantReply,
+      beginFreshChatSession,
       ensureSession,
       isSending,
       isUploading,
@@ -735,6 +747,12 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
       setMessages((current) => [...current, userMessage]);
 
+      // One History card per chat turn. Multi-image batches call
+      // beginFreshChatSession once before the loop, then reuse that session.
+      if (!options?.skipAssistantReply) {
+        beginFreshChatSession();
+      }
+
       const savedUserMessage = await persistMessage(
         userMessage,
         context.pondId,
@@ -758,7 +776,13 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
       return prompt;
     },
-    [appendAssistantReply, persistMessage, resolveContext, selectedPondName],
+    [
+      appendAssistantReply,
+      beginFreshChatSession,
+      persistMessage,
+      resolveContext,
+      selectedPondName,
+    ],
   );
 
   const sendImageAttachment = useCallback(
@@ -786,6 +810,9 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
 
           const { data: authData } = await supabase.auth.getUser();
           const prompts: string[] = [];
+
+          // One History conversation for this attachment batch.
+          beginFreshChatSession();
 
           for (const picked of resolvedImages) {
             const upload = await uploadAquaGptFile({
@@ -841,6 +868,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
     },
     [
       appendAssistantReply,
+      beginFreshChatSession,
       isSending,
       isUploading,
       sendUploadedAttachment,
@@ -868,6 +896,8 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
         const assets = result.assets.slice(0, MAX_ATTACHMENT_COUNT);
         const { data: authData } = await supabase.auth.getUser();
         const prompts: string[] = [];
+
+        beginFreshChatSession();
 
         for (const asset of assets) {
           const upload = await uploadAquaGptFile({
@@ -918,6 +948,7 @@ export function AquaChatProvider({ children }: { children: ReactNode }) {
     },
     [
       appendAssistantReply,
+      beginFreshChatSession,
       isSending,
       isUploading,
       sendUploadedAttachment,

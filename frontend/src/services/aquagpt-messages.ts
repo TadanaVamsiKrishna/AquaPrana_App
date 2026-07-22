@@ -349,7 +349,10 @@ export async function saveAquaGptMessage(
     insertError = null;
   }
 
-  // Touch session activity + set title from first user message.
+  // Touch session activity, last_message, and set title from first user message.
+  const activityAt = new Date().toISOString();
+  const previewText = previewFromContent(content);
+
   if (input.role === "user") {
     const { data: session } = await supabase
       .from("aquagpt_sessions")
@@ -357,23 +360,49 @@ export async function saveAquaGptMessage(
       .eq("id", input.sessionId)
       .maybeSingle();
 
-    const updates: { last_activity: string; title?: string } = {
-      last_activity: new Date().toISOString(),
+    const updates: {
+      last_activity: string;
+      last_message?: string;
+      title?: string;
+    } = {
+      last_activity: activityAt,
+      last_message: previewText || content.slice(0, 80),
     };
 
     if (!session?.title?.trim()) {
       updates.title = titleFromMessage(content);
     }
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("aquagpt_sessions")
       .update(updates)
       .eq("id", input.sessionId);
+
+    // Fallback if last_message column is not migrated yet.
+    if (updateError) {
+      const { last_message: _ignored, ...withoutLastMessage } = updates;
+      await supabase
+        .from("aquagpt_sessions")
+        .update(withoutLastMessage)
+        .eq("id", input.sessionId);
+    }
   } else {
-    await supabase
+    const updates = {
+      last_activity: activityAt,
+      last_message: previewText || content.slice(0, 80),
+    };
+
+    const { error: updateError } = await supabase
       .from("aquagpt_sessions")
-      .update({ last_activity: new Date().toISOString() })
+      .update(updates)
       .eq("id", input.sessionId);
+
+    if (updateError) {
+      await supabase
+        .from("aquagpt_sessions")
+        .update({ last_activity: activityAt })
+        .eq("id", input.sessionId);
+    }
   }
 
   if (!row) {
@@ -406,80 +435,288 @@ async function mergePersistedMessage(
   };
 }
 
+const HISTORY_PAGE_SIZE = 100;
+
+type SessionListRow = {
+  id: string;
+  pond_id: string | null;
+  title?: string | null;
+  created_at: string;
+  last_activity?: string | null;
+  last_message?: string | null;
+};
+
+type MessageTurn = {
+  userId: string;
+  userContent: string;
+  userAt: string;
+  assistantIds: string[];
+  assistantContent: string | null;
+  assistantAt: string | null;
+};
+
+/**
+ * Older builds packed many Q&As into one session. Split those so History
+ * shows one card per user question (user + following assistant reply).
+ */
+export async function splitPackedAquaGptSessions(
+  userId: string,
+  pondId: string | null,
+): Promise<void> {
+  if (!isValidAquaGptUuid(userId)) {
+    return;
+  }
+
+  let sessionQuery = supabase
+    .from("aquagpt_sessions")
+    .select("id, language")
+    .eq("user_id", userId);
+
+  sessionQuery = pondId
+    ? sessionQuery.eq("pond_id", pondId)
+    : sessionQuery.is("pond_id", null);
+
+  const { data: sessions, error } = await sessionQuery;
+  if (error || !sessions?.length) {
+    return;
+  }
+
+  for (const session of sessions) {
+    const { data: messages, error: messagesError } = await supabase
+      .from("aquagpt_messages")
+      .select("id, role, content, created_at")
+      .eq("session_id", session.id)
+      .order("created_at", { ascending: true });
+
+    if (messagesError || !messages?.length) {
+      continue;
+    }
+
+    const turns: MessageTurn[] = [];
+    let current: MessageTurn | null = null;
+
+    for (const message of messages) {
+      if (message.role === "user") {
+        if (current) {
+          turns.push(current);
+        }
+        current = {
+          userId: message.id,
+          userContent: message.content ?? "",
+          userAt: message.created_at,
+          assistantIds: [],
+          assistantContent: null,
+          assistantAt: null,
+        };
+        continue;
+      }
+
+      if (message.role === "assistant" && current) {
+        current.assistantIds.push(message.id);
+        // Keep the latest assistant text in this turn as preview.
+        current.assistantContent = message.content ?? current.assistantContent;
+        current.assistantAt = message.created_at;
+      }
+    }
+
+    if (current) {
+      turns.push(current);
+    }
+
+    if (turns.length <= 1) {
+      continue;
+    }
+
+    // Keep the first turn on the original session.
+    const first = turns[0];
+    const firstUpdates: Record<string, string> = {
+      title: titleFromMessage(first.userContent),
+      last_activity: first.assistantAt || first.userAt,
+      last_message: previewFromContent(
+        first.assistantContent || first.userContent,
+      ),
+    };
+
+    const { error: firstUpdateError } = await supabase
+      .from("aquagpt_sessions")
+      .update(firstUpdates)
+      .eq("id", session.id);
+
+    if (firstUpdateError) {
+      await supabase
+        .from("aquagpt_sessions")
+        .update({
+          title: firstUpdates.title,
+          last_activity: firstUpdates.last_activity,
+        })
+        .eq("id", session.id);
+    }
+
+    for (const turn of turns.slice(1)) {
+      const created = await createAquaGptSession(userId, pondId, {
+        title: titleFromMessage(turn.userContent),
+        language: session.language ?? "English",
+      });
+
+      if (!created.sessionId) {
+        console.log("[AquaGPT] split session create failed:", created.error);
+        continue;
+      }
+
+      const moveIds = [turn.userId, ...turn.assistantIds];
+      const { error: moveError } = await supabase
+        .from("aquagpt_messages")
+        .update({ session_id: created.sessionId })
+        .in("id", moveIds);
+
+      if (moveError) {
+        console.log("[AquaGPT] split move messages failed:", moveError.message);
+        continue;
+      }
+
+      const activity = turn.assistantAt || turn.userAt;
+      const preview = previewFromContent(
+        turn.assistantContent || turn.userContent,
+      );
+      const { error: metaError } = await supabase
+        .from("aquagpt_sessions")
+        .update({
+          title: titleFromMessage(turn.userContent),
+          last_activity: activity,
+          last_message: preview,
+        })
+        .eq("id", created.sessionId);
+
+      if (metaError) {
+        await supabase
+          .from("aquagpt_sessions")
+          .update({
+            title: titleFromMessage(turn.userContent),
+            last_activity: activity,
+          })
+          .eq("id", created.sessionId);
+      }
+    }
+  }
+}
+
+/** Fetch every conversation for a pond (paginated under the hood, no UI cap). */
 export async function listAquaGptSessionsForPond(
   userId: string,
   pondId: string | null,
-  limit = 80,
 ): Promise<{ sessions: AquaGptSessionSummary[]; error: Error | null }> {
-  let query = supabase
-    .from("aquagpt_sessions")
-    .select("id, pond_id, title, created_at, last_activity")
-    .eq("user_id", userId)
-    .order("last_activity", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
+  // Repair packed sessions so every past question appears in History.
+  try {
+    await splitPackedAquaGptSessions(userId, pondId);
+  } catch (error) {
+    console.log("[AquaGPT] split packed sessions skipped:", error);
+  }
 
-  query = pondId ? query.eq("pond_id", pondId) : query.is("pond_id", null);
+  const rows: SessionListRow[] = [];
+  let offset = 0;
+  let useMinimal = false;
 
-  const { data, error } = await query;
+  while (true) {
+    const from = offset;
+    const to = offset + HISTORY_PAGE_SIZE - 1;
 
-  if (error) {
-    let fallbackQuery = supabase
-      .from("aquagpt_sessions")
-      .select("id, pond_id, created_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    let page;
+    if (!useMinimal) {
+      let query = supabase
+        .from("aquagpt_sessions")
+        .select("id, pond_id, title, created_at, last_activity, last_message")
+        .eq("user_id", userId)
+        .order("last_activity", { ascending: false })
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
-    fallbackQuery = pondId
-      ? fallbackQuery.eq("pond_id", pondId)
-      : fallbackQuery.is("pond_id", null);
+      query = pondId ? query.eq("pond_id", pondId) : query.is("pond_id", null);
+      page = await query;
 
-    const fallback = await fallbackQuery;
-    if (fallback.error) {
-      return { sessions: [], error: new Error(fallback.error.message) };
+      if (page.error) {
+        useMinimal = true;
+        continue;
+      }
+    } else {
+      let query = supabase
+        .from("aquagpt_sessions")
+        .select("id, pond_id, title, created_at, last_activity")
+        .eq("user_id", userId)
+        .order("last_activity", { ascending: false })
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      query = pondId ? query.eq("pond_id", pondId) : query.is("pond_id", null);
+      page = await query;
+
+      if (page.error) {
+        // Final fallback: created_at only (pre-migration schemas).
+        let fallbackQuery = supabase
+          .from("aquagpt_sessions")
+          .select("id, pond_id, created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        fallbackQuery = pondId
+          ? fallbackQuery.eq("pond_id", pondId)
+          : fallbackQuery.is("pond_id", null);
+
+        const fallback = await fallbackQuery;
+        if (fallback.error) {
+          return { sessions: [], error: new Error(fallback.error.message) };
+        }
+        page = fallback;
+      }
     }
 
-    const sessions = (
-      await Promise.all(
-        (fallback.data ?? []).map(async (row) => {
-          const preview = await fetchLatestMessagePreview(row.id);
-          if (!preview.hasMessages) {
-            return null;
-          }
-          return {
-            id: row.id,
-            pondId: row.pond_id,
-            title: preview.title || "New conversation",
-            preview: preview.preview,
-            createdAt: row.created_at,
-            lastActivity: row.created_at,
-          } satisfies AquaGptSessionSummary;
-        }),
-      )
-    ).filter((session): session is AquaGptSessionSummary => session != null);
+    const batch = (page.data ?? []) as SessionListRow[];
+    rows.push(...batch);
 
-    return { sessions, error: null };
+    if (batch.length < HISTORY_PAGE_SIZE) {
+      break;
+    }
+
+    offset += HISTORY_PAGE_SIZE;
   }
 
   const sessions = (
     await Promise.all(
-      (data ?? []).map(async (row) => {
-        const preview = await fetchLatestMessagePreview(row.id);
-        if (!preview.hasMessages) {
-          return null;
+      rows.map(async (row) => {
+        const storedPreview = previewFromContent(row.last_message);
+        let title = row.title?.trim() || "";
+        let preview = storedPreview;
+        let lastActivity = row.last_activity || row.created_at;
+
+        // Only hit messages table when session summary fields are incomplete.
+        if (!title || !preview) {
+          const messagePreview = await fetchLatestMessagePreview(row.id);
+          if (!messagePreview.hasMessages) {
+            return null;
+          }
+          title = title || messagePreview.title || "New conversation";
+          preview = preview || messagePreview.preview;
+          lastActivity = messagePreview.lastActivity || lastActivity;
         }
+
         return {
           id: row.id,
           pondId: row.pond_id,
-          title: row.title?.trim() || preview.title || "New conversation",
-          preview: preview.preview,
+          title: title || "New conversation",
+          preview,
           createdAt: row.created_at,
-          lastActivity: row.last_activity || row.created_at,
+          lastActivity,
         } satisfies AquaGptSessionSummary;
       }),
     )
   ).filter((session): session is AquaGptSessionSummary => session != null);
+
+  // Newest activity first (stable if DB ordering already applied).
+  sessions.sort((a, b) => {
+    const aTime = new Date(a.lastActivity || a.createdAt).getTime();
+    const bTime = new Date(b.lastActivity || b.createdAt).getTime();
+    return bTime - aTime;
+  });
 
   return { sessions, error: null };
 }
@@ -506,6 +743,7 @@ async function fetchLatestMessagePreview(sessionId: string) {
     hasMessages: Boolean(data),
     title: titleFromMessage(firstUser.data?.content),
     preview: previewFromContent(data?.content),
+    lastActivity: data?.created_at ?? null,
   };
 }
 

@@ -34,6 +34,20 @@ function startOfDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
+function formatActivityTime(iso: string) {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) {
+    return "";
+  }
+
+  return when.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function groupLabel(iso: string, t: (key: string) => string) {
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) {
@@ -72,16 +86,24 @@ export function AquaChatHistoryDrawer({ visible, onClose, pondName }: Props) {
 
   const [sessions, setSessions] = useState<AquaGptSessionSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [slide] = useState(() => new Animated.Value(DRAWER_WIDTH));
 
   const loadHistory = useCallback(async () => {
     setIsLoading(true);
-    const next = await listConversations();
-    setSessions(next);
-    setIsLoading(false);
-  }, [listConversations]);
+    setLoadError(null);
+    try {
+      const next = await listConversations();
+      setSessions(next);
+    } catch {
+      setSessions([]);
+      setLoadError(t("aquagpt.historyEmpty"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [listConversations, t]);
 
   useEffect(() => {
     if (!visible) {
@@ -224,7 +246,9 @@ export function AquaChatHistoryDrawer({ visible, onClose, pondName }: Props) {
                 contentContainerStyle={styles.listContent}
                 showsVerticalScrollIndicator={false}
               >
-                {grouped.length === 0 ? (
+                {loadError ? (
+                  <Text style={styles.emptyText}>{loadError}</Text>
+                ) : grouped.length === 0 ? (
                   <Text style={styles.emptyText}>
                     {t("aquagpt.historyEmpty")}
                   </Text>
@@ -255,6 +279,15 @@ export function AquaChatHistoryDrawer({ visible, onClose, pondName }: Props) {
                                   ? ` • ${session.preview}`
                                   : ""}
                               </Text>
+                              {formatActivityTime(
+                                session.lastActivity || session.createdAt,
+                              ) ? (
+                                <Text style={styles.itemTime}>
+                                  {formatActivityTime(
+                                    session.lastActivity || session.createdAt,
+                                  )}
+                                </Text>
+                              ) : null}
                             </View>
                             <Pressable
                               onPress={() => handleDelete(session)}
@@ -402,6 +435,12 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     fontWeight: "500",
+  },
+  itemTime: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 1,
   },
   footer: {
     borderTopWidth: 1,

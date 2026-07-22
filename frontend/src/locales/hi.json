@@ -104,7 +104,7 @@
     "historyToday": "आज",
     "historyYesterday": "कल",
     "historyEarlier": "पहले",
-    "historyEmpty": "इस तालाब के लिए अभी कोई बातचीत नहीं है।",
+    "historyEmpty": "इस तालाब के लिए कोई बातचीत इतिहास उपलब्ध नहीं है।",
     "deleteConversationTitle": "बातचीत हटाएँ?",
     "deleteConversationBody": "यह इस बातचीत और उसके सभी संदेशों को स्थायी रूप से हटा देगा।",
     "delete": "हटाएँ",
